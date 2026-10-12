@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#c7eaff" />
+    <meta name="description" content="戴好安全帽，騎著腳踏車玩數字點數、注音練習和圖像認字，適合幼兒園大班的繁體中文 3D 學習遊戲。" />
+    <title>小小單車學習島</title>
+    <link rel="preload" href="/fonts/ManusCC0-Bold.ttf" as="font" type="font/ttf" crossorigin />
+    <link rel="preload" href="/fonts/ManusCC0SansCJKSC-Regular.woff2" as="font" type="font/woff2" crossorigin />
+  </head>
+  <body>
+    <canvas id="game" aria-hidden="true"></canvas>
+    <div id="ui">
+      <div class="preboot" role="status" aria-label="遊戲載入中">
+        <img id="boot-icon" alt="" />
+        <strong>小小單車學習島</strong>
+        <div class="preboot-track"><i></i></div>
+        <span>正在準備單車路線與好玩的關卡…</span>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

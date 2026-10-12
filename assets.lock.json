@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "groups": {
+    "rider-character": {
+      "name": "單車主角",
+      "order": 20
+    },
+    "share": {
+      "name": "Share",
+      "order": 10
+    }
+  },
+  "bundles": {},
+  "assets": {
+    "assets/images/bike-rider.png": {
+      "path": "/manus-storage/game/sha256/e9c693c32ef55f7b19e8338c09261a4f835a13d80224a1c0e2d4083c9202c46d.png",
+      "sha256": "sha256:e9c693c32ef55f7b19e8338c09261a4f835a13d80224a1c0e2d4083c9202c46d",
+      "size": 548057,
+      "assetType": "image",
+      "groupId": "rider-character"
+    },
+    "assets/share/favicon.png": {
+      "path": "/manus-storage/game/sha256/101dc5c9abeae2236232d273c0471887760a658f7421ed2ec80fb61f340138d2.png",
+      "sha256": "sha256:101dc5c9abeae2236232d273c0471887760a658f7421ed2ec80fb61f340138d2",
+      "size": 213219,
+      "assetType": "image",
+      "groupId": "share"
+    }
+  }
+}
