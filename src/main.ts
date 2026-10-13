@@ -1,11 +1,12 @@
 import './styles/main.css'
 import './ui/learning-ui.css'
+import './ui/campaign-ui.css'
 import { Audio } from './engine/audio'
 import { GameLoop } from './engine/loop'
 import { Renderer } from './engine/renderer'
 import { LearningScene } from './game/learning-scene'
 import { tuning } from './game/tuning'
-import { LearningUi } from './ui/learning-ui'
+import { CampaignUi } from './ui/campaign-ui'
 import faviconUrl from '../assets/share/favicon.png'
 
 async function boot(): Promise<void> {
@@ -19,7 +20,7 @@ async function boot(): Promise<void> {
   const audio = new Audio()
   const scene = new LearningScene(renderer)
   await scene.loadRider()
-  const ui = new LearningUi(root, scene, audio)
+  const ui = new CampaignUi(root, scene, audio)
 
   if (import.meta.env.DEV) {
     const { registerGameTuning } = await import('../scripts/manus-tuning/adapter.js')

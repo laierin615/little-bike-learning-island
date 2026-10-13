@@ -6,6 +6,7 @@ type View = 'home' | 'lesson' | 'complete'
 type Progress = Partial<Record<ActivityId, boolean>>
 const PROGRESS_KEY = 'shuziyin.learning-progress.v1'
 const VOICE_KEY = 'shuziyin.voice-guidance.v1'
+const SOUND_KEY = 'shuziyin.sound-enabled.v1'
 
 export class LearningUi {
   private view: View = 'home'
@@ -15,6 +16,7 @@ export class LearningUi {
   private feedback = ''
   private progress = this.readProgress()
   private voiceEnabled = this.readVoiceSetting()
+  private soundEnabled = this.readSoundSetting()
   private readonly speechSupported = typeof window !== 'undefined'
     && 'speechSynthesis' in window
     && typeof SpeechSynthesisUtterance !== 'undefined'
@@ -24,6 +26,7 @@ export class LearningUi {
     private readonly root: HTMLElement,
     private readonly scene: LearningScene,
     private readonly audio: Audio,
+    private readonly onReturnToCampaign: () => void = () => {},
   ) {
     this.announcer = document.createElement('div')
     this.announcer.className = 'sr-only'
@@ -51,8 +54,9 @@ export class LearningUi {
   }
 
   private start(id: ActivityId): void {
-    this.audio.unlock()
-    this.audio.play('ui')
+    void this.audio.unlock()
+    this.applySound()
+    if (this.soundEnabled) this.audio.play('ui')
     this.activityId = id
     this.questionIndex = 0
     this.answered = false
@@ -154,6 +158,7 @@ export class LearningUi {
         <header class="brand-row">
           <div class="brand-mark" aria-hidden="true"><span>🚴</span><i>★</i></div>
           <div><p class="brand-kicker">小小單車學習島</p><p class="brand-note">騎車數數・注音・圖像認字</p></div>
+          ${this.soundButtonMarkup()}
           ${this.voiceButtonMarkup()}
           <div class="home-progress" aria-label="已完成 ${doneCount} 個關卡，共 ${ACTIVITIES.length} 個">
             <span>里程星星</span><strong>${doneCount} <small>/ ${ACTIVITIES.length}</small></strong>
@@ -166,7 +171,7 @@ export class LearningUi {
           <div class="home-note"><span aria-hidden="true">🚴</span> 答對一道題，腳踏車就前進一步！</div>
         </section>
         <section class="level-list" aria-label="學習關卡">${cards}</section>
-        <footer class="home-footer"><span>慢慢騎、慢慢想，不用趕時間。</span><span class="footer-spark" aria-hidden="true">✦</span></footer>
+        <footer class="home-footer"><span>慢慢騎、慢慢想，不用趕時間。</span><button class="text-button campaign-return" type="button" data-action="campaign-map">↩ 回到 24 關地圖</button><span class="footer-spark" aria-hidden="true">✦</span></footer>
       </main>`
   }
 
@@ -187,7 +192,7 @@ export class LearningUi {
         <header class="lesson-topbar">
           <button class="back-button" type="button" data-action="home" aria-label="回到關卡選單">‹ <span>關卡</span></button>
           <div class="lesson-heading"><span class="lesson-heading-icon" aria-hidden="true">${activity.icon}</span><span>${title}</span></div>
-          <div class="lesson-tools">${this.voiceButtonMarkup()}<div class="question-count">${index + 1}<small> / ${total}</small></div></div>
+          <div class="lesson-tools">${this.soundButtonMarkup()}${this.voiceButtonMarkup()}<div class="question-count">${index + 1}<small> / ${total}</small></div></div>
         </header>
         <div class="lesson-progress" role="progressbar" aria-label="關卡進度" aria-valuemin="0" aria-valuemax="${total}" aria-valuenow="${index + 1}"><i style="width:${progressWidth}%"></i></div>
         <section class="lesson-layout" aria-labelledby="question-title">
@@ -213,6 +218,11 @@ export class LearningUi {
       </main>`
   }
 
+  private soundButtonMarkup(): string {
+    const title = this.soundEnabled ? '配樂與音效已開啟；按一下靜音' : '配樂與音效已關閉；按一下開啟'
+    return `<button class="voice-toggle sound-toggle" type="button" data-action="sound-toggle" aria-pressed="${this.soundEnabled}" aria-label="配樂與音效" title="${title}"><span class="voice-toggle-icon" aria-hidden="true">${this.soundEnabled ? '🎵' : '🔇'}</span><span class="sr-only">${title}</span></button>`
+  }
+
   private voiceButtonMarkup(): string {
     const active = this.speechSupported && this.voiceEnabled
     const title = this.speechSupported
@@ -229,6 +239,8 @@ export class LearningUi {
     else if (target.dataset.action === 'next') this.next()
     else if (target.dataset.action === 'home') this.showHome()
     else if (target.dataset.action === 'replay' && this.activityId) this.start(this.activityId)
+    else if (target.dataset.action === 'campaign-map') this.onReturnToCampaign()
+    else if (target.dataset.action === 'sound-toggle') this.toggleSound()
     else if (target.dataset.action === 'voice-toggle') this.toggleVoice()
     else if (target.dataset.action === 'speak-question') this.speakQuestion()
   }
@@ -279,6 +291,33 @@ export class LearningUi {
     if (this.speechSupported) window.speechSynthesis.cancel()
   }
 
+  private applySound(): void {
+    this.audio.setVolumes(0.24, 0.65, !this.soundEnabled)
+    if (this.soundEnabled) this.audio.startMusic()
+    else this.audio.stopMusic()
+  }
+
+  private toggleSound(): void {
+    this.soundEnabled = !this.soundEnabled
+    this.applySound()
+    this.audio.unlock()
+    try {
+      localStorage.setItem(SOUND_KEY, String(this.soundEnabled))
+    } catch {
+      // The sound setting remains available for this visit when storage is blocked.
+    }
+    this.root.querySelectorAll<HTMLButtonElement>('[data-action="sound-toggle"]').forEach(button => {
+      button.setAttribute('aria-pressed', String(this.soundEnabled))
+      const label = this.soundEnabled ? '配樂與音效已開啟；按一下靜音' : '配樂與音效已關閉；按一下開啟'
+      button.title = label
+      const icon = button.querySelector<HTMLElement>('.voice-toggle-icon')
+      if (icon) icon.textContent = this.soundEnabled ? '🎵' : '🔇'
+      const hiddenLabel = button.querySelector<HTMLElement>('.sr-only')
+      if (hiddenLabel) hiddenLabel.textContent = label
+    })
+    this.announcer.textContent = this.soundEnabled ? '配樂與音效已開啟。' : '配樂與音效已關閉。'
+  }
+
   private toggleVoice(): void {
     if (!this.speechSupported) return
     this.voiceEnabled = !this.voiceEnabled
@@ -298,6 +337,15 @@ export class LearningUi {
       if (hiddenLabel) hiddenLabel.textContent = button.title
     })
     this.announcer.textContent = title
+  }
+
+  private readSoundSetting(): boolean {
+    try {
+      const setting = localStorage.getItem(SOUND_KEY)
+      return setting === null ? true : setting === 'true'
+    } catch {
+      return true
+    }
   }
 
   private readVoiceSetting(): boolean {

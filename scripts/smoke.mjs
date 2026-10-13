@@ -1,4 +1,4 @@
-// End-to-end smoke test for the Traditional Chinese cycling-learning game.
+// End-to-end smoke test for the 24-level bicycle learning campaign.
 // Run after `pnpm build`; captures desktop and phone screenshots in ./shots/.
 import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
@@ -49,7 +49,7 @@ async function openGame(context, errors) {
   })
   watchErrors(page, errors)
   await page.goto(url)
-  await page.waitForSelector('.home-screen', { timeout: 30_000 })
+  await page.waitForSelector('.map-screen', { timeout: 30_000 })
   await page.evaluate(async () => {
     await document.fonts.ready
     if (document.documentElement.lang !== 'zh-Hant') throw new Error(`Expected zh-Hant, got ${document.documentElement.lang}`)
@@ -57,16 +57,109 @@ async function openGame(context, errors) {
       throw new Error('Bundled Traditional Chinese font did not load')
     }
   })
+  await page.waitForTimeout(320)
   return page
 }
-async function answerCurrent(page, choice) {
-  await page.locator(`.answer-option[data-answer="${choice}"]`).click()
-  await page.waitForSelector('.answer-feedback.is-correct')
-  await page.locator('[data-action="next"]').click()
+function assert(condition, message) {
+  if (!condition) throw new Error(message)
 }
-async function finishLesson(page, correctAnswers) {
-  for (const answer of correctAnswers) await answerCurrent(page, answer)
-  await page.waitForSelector('.complete-screen')
+async function finishConnect(page, tap = false) {
+  let guardCount = 0
+  while (!(await page.locator('.result-screen').count())) {
+    if (guardCount++ > 8) throw new Error('Connection level did not finish')
+    const first = page.locator('.pair-card[data-pair-side="left"]:not([disabled])').first()
+    if (!(await first.count())) throw new Error('No unmatched left cards remain')
+    const key = await first.getAttribute('data-pair-key')
+    if (!key) throw new Error('Connection card omitted its pair id')
+    if (tap) await first.tap(); else await first.click()
+    const partner = page.locator(`.pair-card[data-pair-side="right"][data-pair-key="${key}"]`)
+    if (tap) await partner.tap(); else await partner.click()
+  }
+}
+async function finishMemory(page) {
+  let guardCount = 0
+  while (!(await page.locator('.result-screen').count())) {
+    if (guardCount++ > 8) throw new Error('Memory level did not finish')
+    const first = page.locator('.memory-card:not([disabled])').first()
+    if (!(await first.count())) throw new Error('No unmatched memory cards remain')
+    const key = await first.getAttribute('data-pair-key')
+    if (!key) throw new Error('Memory card omitted its pair id')
+    await first.click()
+    const mate = page.locator(`.memory-card[data-pair-key="${key}"]:not(.is-open):not([disabled])`).first()
+    await mate.click()
+    await page.waitForFunction(pairKey => {
+      return [...document.querySelectorAll('.memory-card.is-matched')].some(card => card.getAttribute('data-pair-key') === pairKey)
+        || Boolean(document.querySelector('.result-screen'))
+    }, key)
+  }
+}
+async function finishRounds(page) {
+  const total = Number(await page.locator('.challenge-progress').getAttribute('aria-valuemax'))
+  assert(total >= 3, `Expected at least three prompts, got ${total}`)
+  for (let round = 0; round < total; round += 1) {
+    let answered = false
+    for (let index = 0; index < 3; index += 1) {
+      await page.locator('.target-option:not([disabled])').nth(index).click()
+      if (await page.locator('[data-action="advance-round"]').count()) {
+        answered = true
+        break
+      }
+    }
+    assert(answered, `Could not answer round ${round + 1}`)
+    await page.locator('[data-action="advance-round"]').click()
+  }
+  await page.waitForSelector('.result-screen')
+}
+function hasMatch(board, size = 5) {
+  for (let row = 0; row < size; row += 1) {
+    for (let col = 0; col < size - 2; col += 1) {
+      const a = board[row * size + col]
+      if (a === board[row * size + col + 1] && a === board[row * size + col + 2]) return true
+    }
+  }
+  for (let col = 0; col < size; col += 1) {
+    for (let row = 0; row < size - 2; row += 1) {
+      const a = board[row * size + col]
+      if (a === board[(row + 1) * size + col] && a === board[(row + 2) * size + col]) return true
+    }
+  }
+  return false
+}
+function findValidSwap(board, size = 5) {
+  for (let index = 0; index < board.length; index += 1) {
+    const candidates = []
+    if (index % size < size - 1) candidates.push(index + 1)
+    if (index < size * (size - 1)) candidates.push(index + size)
+    for (const other of candidates) {
+      const copy = [...board]
+      ;[copy[index], copy[other]] = [copy[other], copy[index]]
+      if (hasMatch(copy, size)) return [index, other]
+    }
+  }
+  return null
+}
+async function finishMatch3(page) {
+  const target = Number(await page.locator('.challenge-progress').getAttribute('aria-valuemax'))
+  let attempts = 0
+  while (!(await page.locator('.result-screen').count())) {
+    if (attempts++ > 16) throw new Error('Match-three level did not reach its target')
+    const progressBefore = Number(await page.locator('.challenge-progress').getAttribute('aria-valuenow'))
+    if (progressBefore >= target) break
+    const board = await page.locator('.match-tile').allInnerTexts()
+    const swap = findValidSwap(board.map(value => value.trim()))
+    if (!swap) throw new Error(`No valid match-3 move on attempt ${attempts}`)
+    await page.locator(`.match-tile[data-match-cell="${swap[0]}"]`).click()
+    await page.locator(`.match-tile[data-match-cell="${swap[1]}"]`).click()
+    await page.waitForFunction(previous => {
+      const current = Number(document.querySelector('.challenge-progress')?.getAttribute('aria-valuenow') ?? 0)
+      return current > previous || Boolean(document.querySelector('.result-screen'))
+    }, progressBefore)
+  }
+  await page.waitForSelector('.result-screen')
+}
+async function nextLevel(page, expectedId) {
+  await page.locator('[data-action="next-level"]').click()
+  await page.waitForSelector(`.play-screen[data-level-id="${expectedId}"]`)
 }
 
 try {
@@ -77,86 +170,130 @@ try {
   const errors = []
   const desktop = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: 'zh-TW' })
   const page = await openGame(desktop, errors)
-  await page.screenshot({ path: `${out}/01-home-desktop.png` })
-  for (const title of ['數字果園', '注音森林', '圖像認字屋']) {
-    if (!(await page.getByText(title, { exact: true }).count())) throw new Error(`Missing level ${title}`)
+  await page.screenshot({ path: `${out}/01-campaign-map-desktop.png` })
+  assert(await page.locator('[data-level]').count() === 24, 'Campaign map should show all 24 levels')
+  assert(await page.locator('.world-card').count() === 4, 'Campaign map should show four themed worlds')
+  for (const title of ['數字果園', '注音森林', '國字小鎮', '綜合山道']) {
+    assert(await page.getByText(title, { exact: true }).count() > 0, `Missing world ${title}`)
   }
+  assert(!(await page.locator('[data-level="1"]').isDisabled()), 'First level should start unlocked')
+  assert(await page.locator('[data-level="2"]').isDisabled(), 'Later levels should start locked')
   const tweakCount = await page.evaluate(() => window.__game.tuning.controls.length)
-  if (tweakCount !== 3) throw new Error(`Expected three live Tweak camera controls, got ${tweakCount}`)
-  const riderLoaded = await page.evaluate(() => window.__game.game.riderLoaded)
-  if (!riderLoaded) throw new Error('The supplied bicycle-rider character did not load')
-  const signCount = await page.evaluate(() => window.__game.game.learningSignCount)
-  if (signCount !== 3) throw new Error(`Expected three floating lesson signs, got ${signCount}`)
+  assert(tweakCount === 3, `Expected three live Tweak camera controls, got ${tweakCount}`)
+  assert(await page.evaluate(() => window.__game.game.riderLoaded), 'The supplied bicycle-rider character did not load')
+  assert(await page.evaluate(() => window.__game.game.learningSignCount) === 3, 'Expected three floating lesson signs')
 
-  await page.locator('[data-activity="numbers"]').click()
-  await page.waitForSelector('.lesson-screen')
-  if (!(await page.getByRole('heading', { name: '數一數，有幾顆蘋果？' }).count())) throw new Error('Number lesson did not start')
-  const numberDescription = await page.locator('.level-description').innerText()
-  if (!numberDescription.includes('數字果園') || !numberDescription.includes('正確數字')) throw new Error('Number lesson story is missing its learning goal')
-  const numberSky = await page.evaluate(() => window.__game.game.scene.background.getHexString())
-  const introSpeech = await page.evaluate(() => window.__speechLog[0])
-  if (!introSpeech?.text.includes('數字果園') || !introSpeech.text.includes('蘋果') || introSpeech.lang !== 'zh-TW') throw new Error('Number lesson did not speak its Traditional Chinese intro and first question')
-  const voiceButton = page.locator('.lesson-screen [data-action="voice-toggle"]')
-  if (await voiceButton.getAttribute('aria-pressed') !== 'true') throw new Error('Voice guidance should be enabled by default')
-  await voiceButton.click()
-  if (await voiceButton.getAttribute('aria-pressed') !== 'false') throw new Error('Voice toggle did not turn off')
-  const mutedSpeechCount = await page.evaluate(() => window.__speechLog.length)
-  await page.locator('[data-action="speak-question"]').click()
-  if (await page.evaluate(() => window.__speechLog.length) !== mutedSpeechCount) throw new Error('Question replay spoke while voice guidance was off')
-  await voiceButton.click()
-  await page.locator('[data-action="speak-question"]').click()
-  const replaySpeech = await page.evaluate(() => window.__speechLog.at(-1))
-  if (!replaySpeech?.text.includes('答案選項') || replaySpeech.lang !== 'zh-TW') throw new Error('Question replay did not read the prompt and choices in Traditional Chinese')
-  const rideStepsBefore = await page.evaluate(() => window.__game.game.rideSteps)
-  await page.locator('.answer-option[data-answer="2"]').click()
-  await page.waitForSelector('.answer-feedback.is-try-again')
-  if (await page.locator('[data-action="next"]').count()) throw new Error('A wrong answer advanced the lesson')
-  if ((await page.locator('.question-count').innerText()).trim() !== '1 / 5') throw new Error('A wrong answer changed question progress')
-  if (await page.evaluate(() => window.__game.game.rideSteps) !== rideStepsBefore) throw new Error('A wrong answer moved the bicycle rider')
-  await page.screenshot({ path: `${out}/02-retry-desktop.png` })
-  await page.locator('.answer-option[data-answer="3"]').click()
-  await page.waitForSelector('.answer-feedback.is-correct')
-  if (await page.evaluate(() => window.__game.game.rideSteps) !== rideStepsBefore + 1) throw new Error('A correct answer did not advance the bicycle rider')
-  await page.screenshot({ path: `${out}/03-correct-desktop.png` })
-  await page.locator('[data-action="next"]').click()
-  await finishLesson(page, ['5', '4', '6', '7'])
-  if (!(await page.getByText('太棒了！', { exact: true }).count())) throw new Error('Completion screen did not appear')
-  await page.screenshot({ path: `${out}/04-complete-desktop.png` })
-  await page.locator('[data-action="home"]').click()
-  if (!(await page.locator('[data-activity="numbers"]').innerText()).includes('已完成')) throw new Error('Completed progress did not return to the home screen')
-  await page.reload()
+  const mapVoice = page.locator('.map-screen [data-action="voice-toggle"]')
+  assert(await mapVoice.getAttribute('aria-pressed') === 'true', 'Voice guidance should be enabled by default')
+  const sound = page.locator('.map-screen [data-action="sound-toggle"]')
+  await sound.click()
+  assert(await page.locator('.map-screen [data-action="sound-toggle"]').getAttribute('aria-pressed') === 'false', 'Sound button did not mute music and effects')
+  assert(await page.evaluate(() => localStorage.getItem('shuziyin.sound-enabled.v1')) === 'false', 'Muted sound preference was not saved')
+  await page.locator('.map-screen [data-action="sound-toggle"]').click()
+  assert(await page.locator('.map-screen [data-action="sound-toggle"]').getAttribute('aria-pressed') === 'true', 'Sound button did not re-enable music')
+
+  await page.locator('[data-action="practice"]').click()
   await page.waitForSelector('.home-screen')
-  if (!(await page.locator('[data-activity="numbers"]').innerText()).includes('已完成')) throw new Error('Completed progress did not persist after reload')
-  await page.locator('[data-activity="zhuyin"]').click()
-  await page.waitForSelector('.lesson-screen')
-  const zhuyinDescription = await page.locator('.level-description').innerText()
-  if (!zhuyinDescription.includes('注音森林') || !zhuyinDescription.includes('第一個注音')) throw new Error('Zhuyin lesson story is missing its learning goal')
-  const zhuyinSky = await page.evaluate(() => window.__game.game.scene.background.getHexString())
-  if (zhuyinSky === numberSky) throw new Error('The number and Zhuyin scenes should use distinct sky colors')
-  const zhuyinSpeech = await page.evaluate(() => window.__speechLog[0])
-  if (!zhuyinSpeech?.text.includes('注音森林') || !zhuyinSpeech.text.includes('ㄇ')) throw new Error('Zhuyin lesson did not speak its intro, symbol choices and question')
-  await page.locator('.answer-option[data-answer="ㄇ"]').click()
-  await page.waitForSelector('.answer-feedback.is-correct')
-  const zhuyinFeedback = await page.evaluate(() => window.__speechLog.at(-1)?.text ?? '')
-  if (!zhuyinFeedback.includes('貓咪') || !zhuyinFeedback.includes('ㄇ')) throw new Error('Zhuyin answer feedback was not spoken')
-  await page.locator('[data-action="home"]').click()
-  await desktop.close()
+  assert(await page.locator('.practice-root .campaign-return').count() === 1, 'Classic practice must link back to the 24-level map')
+  await page.locator('.practice-root .campaign-return').click()
+  await page.waitForSelector('.map-screen')
 
+  await page.locator('[data-level="1"]').click()
+  await page.waitForSelector('.play-screen[data-level-id="1"][data-campaign-mode="connect"]')
+  const numberSky = await page.evaluate(() => window.__game.game.scene.background.getHexString())
+  assert(await page.locator('.challenge-heading').innerText().then(text => text.includes('數字果園') && text.includes('連連看')), 'Level 1 needs a number story and Connect mode')
+  const intro = await page.evaluate(() => window.__speechLog[0])
+  assert(intro?.text.includes('數字果園') && intro.lang === 'zh-TW', 'Campaign intro should use Traditional Chinese voice guidance')
+  await page.waitForFunction(() => window.__game.audio.soundtrackRunning === true)
+  await page.screenshot({ path: `${out}/02-connect-desktop.png` })
+
+  const replayCount = await page.evaluate(() => window.__speechLog.length)
+  await page.locator('[data-action="replay-guide"]').click()
+  assert(await page.evaluate(() => window.__speechLog.length) === replayCount + 1, 'Replay guide should repeat the challenge narration')
+  await page.locator('.play-screen [data-action="voice-toggle"]').click()
+  assert(await page.locator('.play-screen [data-action="voice-toggle"]').getAttribute('aria-pressed') === 'false', 'Voice guidance toggle did not switch off')
+  const mutedSpeechCount = await page.evaluate(() => window.__speechLog.length)
+  await page.locator('[data-action="replay-guide"]').click()
+  assert(await page.evaluate(() => window.__speechLog.length) === mutedSpeechCount, 'Voice replay should stay muted when voice guidance is off')
+  await page.locator('.play-screen [data-action="voice-toggle"]').click()
+  await page.locator('[data-action="replay-guide"]').click()
+  assert(await page.evaluate(() => window.__speechLog.length) === mutedSpeechCount + 1, 'Voice replay should work after re-enabling guidance')
+
+  const firstLeft = page.locator('.pair-card[data-pair-side="left"]:not([disabled])').first()
+  const firstKey = await firstLeft.getAttribute('data-pair-key')
+  await firstLeft.click()
+  const wrongKey = await page.locator('.pair-card[data-pair-side="right"]').evaluateAll((cards, key) => cards.find(card => card.dataset.pairKey !== key)?.dataset.pairKey, firstKey)
+  await page.locator(`.pair-card[data-pair-side="right"][data-pair-key="${wrongKey}"]`).click()
+  assert((await page.locator('.campaign-feedback').innerText()).includes('換一張'), 'A mismatched pair should give gentle retry feedback')
+  await page.screenshot({ path: `${out}/03-connect-retry-desktop.png` })
+  await finishConnect(page)
+  await page.screenshot({ path: `${out}/04-level-complete-desktop.png` })
+  assert(await page.locator('[data-action="next-level"]').count() === 1, 'Completing a level should reveal the next level button')
+  const savedProgress = await page.evaluate(() => JSON.parse(localStorage.getItem('shuziyin.campaign-progress.v1') ?? '{}'))
+  assert(savedProgress['1'] >= 1, 'First level stars should persist locally')
+  await page.locator('[data-action="back-map"]').click()
+  await page.waitForSelector('.map-screen')
+  assert(!(await page.locator('[data-level="2"]').isDisabled()), 'Completing level one should unlock level two')
+  assert((await page.locator('.campaign-stars').innerText()).includes(String(savedProgress['1'])), 'Campaign map should display saved stars')
+  await page.reload()
+  await page.waitForSelector('.map-screen')
+  assert(!(await page.locator('[data-level="2"]').isDisabled()), 'Unlocked level should remain available after reload')
+
+  await page.locator('[data-level="2"]').click()
+  await page.waitForSelector('.play-screen[data-level-id="2"]')
+  assert(await page.locator('.play-screen').getAttribute('data-campaign-mode') === 'memory', 'Level 2 should use memory-pair gameplay')
+  const memoryCards = page.locator('.memory-card')
+  const firstMemoryKey = await memoryCards.first().getAttribute('data-pair-key')
+  await memoryCards.first().click()
+  await page.locator(`.memory-card[data-pair-key="${firstMemoryKey}"]:not(.is-open)`).first().click()
+  await page.waitForFunction(key => [...document.querySelectorAll('.memory-card.is-matched')].some(card => card.getAttribute('data-pair-key') === key), firstMemoryKey)
+  await finishMemory(page)
+  await nextLevel(page, 3)
+  assert(await page.locator('.play-screen').getAttribute('data-campaign-mode') === 'shoot', 'Level 3 should use friendly bubble-target shooting')
+  await page.screenshot({ path: `${out}/05-bubble-target-desktop.png` })
+  await finishRounds(page)
+  await nextLevel(page, 4)
+  assert(await page.locator('.play-screen').getAttribute('data-campaign-mode') === 'match3', 'Level 4 should use match-three gameplay')
+  await page.screenshot({ path: `${out}/06-match-three-desktop.png` })
+  await finishMatch3(page)
+  await nextLevel(page, 5)
+  await finishConnect(page)
+  await nextLevel(page, 6)
+  assert(await page.locator('.play-screen').getAttribute('data-campaign-mode') === 'relay', 'Level 6 should use the themed finish-line relay')
+  await finishRounds(page)
+  await page.locator('[data-action="back-map"]').click()
+  await page.waitForSelector('.map-screen')
+  assert(!(await page.locator('[data-level="7"]').isDisabled()), 'Finishing level six should unlock the Zhuyin world')
+  await page.locator('[data-level="7"]').click()
+  await page.waitForSelector('.play-screen[data-level-id="7"]')
+  const zhuyinStory = await page.locator('.challenge-heading').innerText()
+  assert(zhuyinStory.includes('注音森林') && zhuyinStory.includes('注音'), 'The second world should explain its Zhuyin learning challenge')
+  const zhuyinSky = await page.evaluate(() => window.__game.game.scene.background.getHexString())
+  assert(zhuyinSky !== numberSky, 'Zhuyin and number campaign levels should select distinct scene lighting')
+  await page.screenshot({ path: `${out}/07-zhuyin-world-desktop.png` })
+
+  await desktop.close()
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'zh-TW' })
   const phonePage = await openGame(phone, errors)
-  await phonePage.screenshot({ path: `${out}/05-home-phone.png`, fullPage: true })
-  await phonePage.locator('[data-activity="characters"]').tap()
-  await phonePage.waitForSelector('.lesson-screen')
-  await phonePage.locator('.answer-option[data-answer="日"]').tap()
-  await phonePage.waitForSelector('.answer-feedback.is-correct')
-  const memoryFeedback = await phonePage.locator('.answer-feedback').innerText()
-  if (!memoryFeedback.includes('太陽') || !memoryFeedback.includes('日')) throw new Error('Picture-assisted character memory feedback is missing')
-  await phonePage.screenshot({ path: `${out}/06-picture-character-phone.png`, fullPage: true })
+  assert(await phonePage.locator('[data-level]').count() === 24, 'Phone map should still expose all 24 levels')
+  const mapHeight = await phonePage.locator('.campaign-map-scroll').evaluate(element => element.scrollHeight > element.clientHeight)
+  assert(mapHeight, 'The four campaign worlds should scroll on a phone')
+  await phonePage.screenshot({ path: `${out}/08-campaign-map-phone.png`, fullPage: true })
+  await phonePage.locator('[data-level="1"]').tap()
+  await phonePage.waitForSelector('.play-screen[data-level-id="1"]')
+  await finishConnect(phonePage, true)
+  await nextLevel(phonePage, 2)
+  await phonePage.locator('.memory-card').first().tap()
+  const phonePairKey = await phonePage.locator('.memory-card.is-open').getAttribute('data-pair-key')
+  await phonePage.locator(`.memory-card[data-pair-key="${phonePairKey}"]:not(.is-open)`).first().tap()
+  await phonePage.waitForFunction(key => [...document.querySelectorAll('.memory-card.is-matched')].some(card => card.getAttribute('data-pair-key') === key), phonePairKey)
+  await phonePage.screenshot({ path: `${out}/09-memory-pairs-phone.png`, fullPage: true })
   await phone.close()
+
   if (errors.length) throw new Error(`console errors:\n  ${errors.join('\n  ')}`)
   await browser.close()
   cleanup()
-  console.log(`smoke: OK — screenshots in ${out}/`)
+  console.log(`smoke: OK — campaign map, connect, memory, bubble shooting, match-three, relay, audio and phone touch; screenshots in ${out}/`)
 } catch (error) {
   await fail(error?.message ?? String(error))
 }
