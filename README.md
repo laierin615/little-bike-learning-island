@@ -1,8 +1,8 @@
 # 小小單車學習島
 
-適合幼兒園大班的繁體中文 3D 學習遊戲。沿著單車路線收集數字、注音和簡單國字，現在有 **24 關挑戰旅程**，並保留原本三項自由練習。
+適合幼兒園大班的繁體中文 3D 學習遊戲。沿著單車路線收集數字、注音和簡單國字，現在有 **30 關挑戰旅程**（含 6 關數字／注音描寫），並保留原本三項自由練習。
 
-## 24 關挑戰
+## 30 關挑戰
 
 關卡地圖分成四段、每段六站：
 
@@ -33,12 +33,13 @@ pnpm dev -- --host 0.0.0.0
 pnpm typecheck
 pnpm test
 pnpm build
-pnpm smoke  # build 後以 Chromium 驗證 24 關、五種玩法、存檔和手機觸控
+pnpm smoke  # build 後以 Chromium 驗證 30 關、六種玩法（含描寫）、存檔和手機觸控
 ```
 
 ## 專案結構
 
-- `src/game/campaign.ts`：24 關資料、挑戰描述、學習配對與題庫。
+- `src/game/campaign.ts`：30 關資料、挑戰描述、學習配對與題庫；`shuffleChoices` 讓每題答案位置隨機。
+- `src/game/trace-rules.ts`：描寫判定（64×64 格點，覆蓋 ≥ 60%、落在虛線附近 ≥ 70%，不檢查筆順）。
 - `src/game/campaign-rules.ts`：解鎖、星數、棋盤和消除規則。
 - `src/ui/campaign-ui.ts` / `campaign-ui.css`：進度地圖與五種玩法介面。
 - `src/ui/learning-ui.ts`：原有自由練習、語音導讀和本機紀錄。

@@ -1,5 +1,6 @@
 import type { Audio } from '../engine/audio'
 import { Voice } from '../engine/voice'
+import { shuffleChoices } from '../game/campaign'
 import { FEEDBACK, practiceComplete, practiceCorrect, practiceIntro, practiceQuestion } from '../game/speech-lines'
 import { ACTIVITIES, answerIsCorrect, getActivity, type ActivityId, type LessonQuestion } from '../game/lessons'
 import { LearningScene } from '../game/learning-scene'
@@ -14,6 +15,8 @@ export class LearningUi {
   private view: View = 'home'
   private activityId: ActivityId | null = null
   private questionIndex = 0
+  /** Answer choices for the current question, shuffled so the right one moves around. */
+  private choiceOrder: string[] = []
   private answered = false
   private feedback = ''
   private progress = this.readProgress()
@@ -61,6 +64,7 @@ export class LearningUi {
     if (this.soundEnabled) this.audio.play('ui')
     this.activityId = id
     this.questionIndex = 0
+    this.choiceOrder = shuffleChoices(getActivity(id).questions[0].choices)
     this.answered = false
     this.feedback = ''
     this.view = 'lesson'
@@ -97,6 +101,7 @@ export class LearningUi {
     const activity = getActivity(this.activityId)
     if (this.questionIndex + 1 < activity.questions.length) {
       this.questionIndex += 1
+      this.choiceOrder = shuffleChoices(activity.questions[this.questionIndex].choices)
       this.answered = false
       this.feedback = ''
       this.renderLesson()
@@ -184,7 +189,7 @@ export class LearningUi {
       ? `<div class="counting-pictures" role="img" aria-label="${question.objects.length} 個${question.pictureLabel}">${question.objects.map(item => `<span aria-hidden="true">${item}</span>`).join('')}</div>`
       : `<div class="picture-emoji" role="img" aria-label="${question.pictureLabel}">${question.picture}</div>`
     const word = question.word ? `<span class="picture-word">${question.word}</span>` : ''
-    const choices = question.choices.map(choice => `
+    const choices = this.choiceOrder.map(choice => `
       <button class="answer-option ${this.answered && choice === question.answer ? 'is-right' : ''}" type="button" data-answer="${choice}" ${this.answered ? 'disabled' : ''} aria-label="選擇 ${choice}">
         <span class="answer-glyph">${choice}</span>
         ${this.answered && choice === question.answer ? '<span class="answer-check" aria-hidden="true">✓</span>' : ''}
@@ -249,7 +254,7 @@ export class LearningUi {
 
   private onKeyDown(event: KeyboardEvent): void {
     if (this.view !== 'lesson' || this.answered || !['1', '2', '3'].includes(event.key) || !this.activityId) return
-    const choice = getActivity(this.activityId).questions[this.questionIndex].choices[Number(event.key) - 1]
+    const choice = this.choiceOrder[Number(event.key) - 1]
     if (choice) {
       event.preventDefault()
       this.answer(choice)
@@ -258,7 +263,7 @@ export class LearningUi {
 
   private speakLevelIntro(): void {
     if (!this.activityId) return
-    this.speak(practiceIntro(getActivity(this.activityId), this.questionIndex))
+    this.speak(practiceIntro(getActivity(this.activityId), this.questionIndex, this.choiceOrder))
   }
 
   private speakQuestion(): void {
@@ -268,7 +273,7 @@ export class LearningUi {
   }
 
   private questionText(question: LessonQuestion, index: number): string {
-    return practiceQuestion(question, index)
+    return practiceQuestion(question, index, this.choiceOrder)
   }
 
   private speak(text: string): void {

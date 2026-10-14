@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CAMPAIGN_LEVELS, getCampaignLevel } from '../src/game/campaign'
+import { CAMPAIGN_LEVELS, CAMPAIGN_WORLDS, getCampaignLevel, shuffleChoices } from '../src/game/campaign'
 import {
   CAMPAIGN_LEVEL_COUNT,
   collapseAndRefillMatches,
@@ -13,29 +13,31 @@ import {
   tryMatchSwap,
 } from '../src/game/campaign-rules'
 
-describe('24-level bicycle campaign', () => {
-  it('contains four six-stop worlds in a consecutive 24-level route', () => {
+describe('30-level bicycle campaign', () => {
+  it('contains five six-stop worlds in a consecutive 30-level route', () => {
     expect(CAMPAIGN_LEVELS).toHaveLength(CAMPAIGN_LEVEL_COUNT)
-    expect(CAMPAIGN_LEVELS.map(level => level.id)).toEqual(Array.from({ length: 24 }, (_, i) => i + 1))
-    for (let world = 1; world <= 4; world += 1) {
+    expect(CAMPAIGN_LEVELS.map(level => level.id)).toEqual(Array.from({ length: 30 }, (_, i) => i + 1))
+    expect(CAMPAIGN_WORLDS).toHaveLength(5)
+    for (let world = 1; world <= 5; world += 1) {
       expect(CAMPAIGN_LEVELS.filter(level => level.world === world)).toHaveLength(6)
     }
     expect(CAMPAIGN_LEVELS[0].topic).toBe('numbers')
     expect(CAMPAIGN_LEVELS[6].topic).toBe('zhuyin')
     expect(CAMPAIGN_LEVELS[12].topic).toBe('characters')
     expect(CAMPAIGN_LEVELS[18].topic).toBe('mixed')
+    expect(CAMPAIGN_LEVELS.slice(24).every(level => level.mode === 'trace')).toBe(true)
   })
 
   it('describes every individual challenge and includes all requested game modes', () => {
-    expect(new Set(CAMPAIGN_LEVELS.map(level => level.title)).size).toBe(24)
+    expect(new Set(CAMPAIGN_LEVELS.map(level => level.title)).size).toBe(30)
     expect(CAMPAIGN_LEVELS.every(level => level.story.length > 25 && level.challenge.length > 15)).toBe(true)
-    expect(new Set(CAMPAIGN_LEVELS.map(level => level.mode))).toEqual(new Set(['connect', 'memory', 'shoot', 'match3', 'relay']))
+    expect(new Set(CAMPAIGN_LEVELS.map(level => level.mode))).toEqual(new Set(['connect', 'memory', 'shoot', 'match3', 'relay', 'trace']))
     expect(CAMPAIGN_LEVELS.map(level => level.title).join(' ')).toContain('消消樂')
     expect(CAMPAIGN_LEVELS.map(level => level.challenge).join(' ')).toContain('泡泡靶')
   })
 
   it('gives every round one distinct correct answer and enough matching cards', () => {
-    for (const level of CAMPAIGN_LEVELS) {
+    for (const level of CAMPAIGN_LEVELS.filter(level => level.mode !== 'trace')) {
       expect(level.pairs.length).toBeGreaterThanOrEqual(3)
       expect(level.pairs.every(pair => pair.key && pair.left && pair.right && pair.learningNote)).toBe(true)
       expect(level.rounds.length).toBeGreaterThanOrEqual(4)
@@ -51,9 +53,30 @@ describe('24-level bicycle campaign', () => {
     }
   })
 
+  it('gives every tracing level three symbols of its topic', () => {
+    const traces = CAMPAIGN_LEVELS.filter(level => level.mode === 'trace')
+    expect(traces).toHaveLength(6)
+    expect(traces.flatMap(level => level.traceSymbols).join('')).toBe('123456789ㄅㄆㄇㄈㄉㄊㄋㄌㄍ')
+    expect(traces.every(level => level.traceSymbols.length === 3)).toBe(true)
+  })
+
+  it('shuffles answer choices so the correct answer moves around', () => {
+    const choices = ['甲', '乙', '丙']
+    let seed = 7
+    const random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646
+    const positions = new Set<number>()
+    for (let run = 0; run < 60; run += 1) {
+      const order = shuffleChoices(choices, random)
+      expect([...order].sort()).toEqual([...choices].sort())
+      positions.add(order.indexOf('甲'))
+    }
+    expect(positions).toEqual(new Set([0, 1, 2]))
+    expect(choices).toEqual(['甲', '乙', '丙'])
+  })
+
   it('fails clearly for an invalid campaign level id', () => {
     expect(() => getCampaignLevel(0)).toThrow('Unknown campaign level')
-    expect(() => getCampaignLevel(25)).toThrow('Unknown campaign level')
+    expect(() => getCampaignLevel(31)).toThrow('Unknown campaign level')
   })
 })
 
@@ -63,13 +86,14 @@ describe('campaign progress', () => {
     expect(isLevelUnlocked(2, {})).toBe(false)
     expect(isLevelUnlocked(2, { 1: 1 })).toBe(true)
     expect(isLevelUnlocked(4, { 1: 3, 2: 2 })).toBe(false)
-    expect(isLevelUnlocked(25, { 24: 3 })).toBe(false)
+    expect(isLevelUnlocked(25, { 24: 3 })).toBe(true)
+    expect(isLevelUnlocked(31, { 30: 3 })).toBe(false)
   })
 
   it('parses only valid saved stars and safely ignores malformed or corrupt storage', () => {
     expect(parseCampaignProgress('{bad')).toEqual({})
     expect(parseCampaignProgress('[]')).toEqual({})
-    expect(parseCampaignProgress(JSON.stringify({ 1: 4, 2: 2, 3: 0, 25: 3, nope: 2 }))).toEqual({ 2: 2 })
+    expect(parseCampaignProgress(JSON.stringify({ 1: 4, 2: 2, 3: 0, 31: 3, nope: 2 }))).toEqual({ 2: 2 })
   })
 
   it('preserves a level best and never takes stars away on a replay', () => {

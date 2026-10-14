@@ -1,6 +1,6 @@
 export type CampaignProgress = Partial<Record<number, number>>
 export const CAMPAIGN_PROGRESS_KEY = 'shuziyin.campaign-progress.v1'
-export const CAMPAIGN_LEVEL_COUNT = 24
+export const CAMPAIGN_LEVEL_COUNT = 30
 export const MATCH_GRID_SIZE = 5
 
 export function parseCampaignProgress(raw: string | null): CampaignProgress {

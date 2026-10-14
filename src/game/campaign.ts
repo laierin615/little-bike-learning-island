@@ -1,7 +1,7 @@
 import type { ActivityId } from './lessons'
 
 export type CampaignTopic = ActivityId | 'mixed'
-export type CampaignMode = 'connect' | 'memory' | 'shoot' | 'match3' | 'relay'
+export type CampaignMode = 'connect' | 'memory' | 'shoot' | 'match3' | 'relay' | 'trace'
 
 export type CampaignPair = {
   key: string
@@ -33,6 +33,8 @@ export type CampaignLevel = {
   rounds: CampaignPrompt[]
   matchSymbols: string[]
   matchTarget: number
+  /** Symbols to trace, in order, for `trace` levels; empty otherwise. */
+  traceSymbols: string[]
 }
 
 const WORLD_DATA: Array<{
@@ -85,6 +87,7 @@ const MODE_INSTRUCTIONS: Record<CampaignMode, string> = {
   shoot: '看清楚圖片和題目，點一下正確答案的泡泡靶；答錯也可以再試一次。',
   match3: '點一塊圖卡，再點旁邊的圖卡交換；排出三個相同符號即可消除。',
   relay: '完成沿路的小題，替腳踏車收集補給星星，一起騎到終點。',
+  trace: '用手指沿著虛線慢慢描，描完按「寫好了」；描不夠也沒關係，可以擦掉重寫。',
 }
 
 const PAIRS: Record<CampaignTopic, CampaignPair[]> = {
@@ -217,11 +220,47 @@ export const CAMPAIGN_LEVELS: CampaignLevel[] = WORLD_DATA.flatMap((world, world
       rounds: roundsFor(world.topic, id, roundCount),
       matchSymbols: MATCH_SYMBOLS[world.topic],
       matchTarget,
+      traceSymbols: [],
     }
   }),
 )
 
-export const CAMPAIGN_WORLDS = WORLD_DATA.map((world, index) => ({
+/** World 5 (levels 25–30): tracing numbers and Zhuyin along the rainbow road. */
+const TRACE_WORLD = {
+  name: '描寫彩虹路',
+  color: '#2f86e8',
+  icon: '✏️',
+  story: '沿著彩虹路，用手指描一描，把數字和注音寫得漂漂亮亮。',
+}
+const TRACE_STOPS: Array<{ topic: CampaignTopic; title: string; symbols: string[] }> = [
+  { topic: 'numbers', title: '數字描描 1 2 3', symbols: ['1', '2', '3'] },
+  { topic: 'numbers', title: '數字描描 4 5 6', symbols: ['4', '5', '6'] },
+  { topic: 'numbers', title: '數字描描 7 8 9', symbols: ['7', '8', '9'] },
+  { topic: 'zhuyin', title: '注音描描 ㄅㄆㄇ', symbols: ['ㄅ', 'ㄆ', 'ㄇ'] },
+  { topic: 'zhuyin', title: '注音描描 ㄈㄉㄊ', symbols: ['ㄈ', 'ㄉ', 'ㄊ'] },
+  { topic: 'zhuyin', title: '注音描描 ㄋㄌㄍ', symbols: ['ㄋ', 'ㄌ', 'ㄍ'] },
+]
+CAMPAIGN_LEVELS.push(...TRACE_STOPS.map((stop, stopIndex): CampaignLevel => {
+  const kind = stop.topic === 'numbers' ? '數字' : '注音'
+  return {
+    id: WORLD_DATA.length * 6 + stopIndex + 1,
+    world: WORLD_DATA.length + 1,
+    worldName: TRACE_WORLD.name,
+    topic: stop.topic,
+    mode: 'trace',
+    title: stop.title,
+    story: `${TRACE_WORLD.story} 第 ${stopIndex + 1} 站：描寫${kind} ${stop.symbols.join('、')}，每個符號描完就收集一顆星。`,
+    challenge: MODE_INSTRUCTIONS.trace,
+    color: TRACE_WORLD.color,
+    pairs: [],
+    rounds: [],
+    matchSymbols: [],
+    matchTarget: 0,
+    traceSymbols: stop.symbols,
+  }
+}))
+
+export const CAMPAIGN_WORLDS = [...WORLD_DATA, TRACE_WORLD].map((world, index) => ({
   id: index + 1,
   name: world.name,
   color: world.color,
@@ -243,6 +282,17 @@ export function getModeLabel(mode: CampaignMode): string {
     shoot: '泡泡射擊',
     match3: '消消樂',
     relay: '接力挑戰',
+    trace: '描寫',
   }
   return labels[mode]
+}
+
+/** Choices in a fresh random order, so the right answer is not always in the same spot. */
+export function shuffleChoices(choices: readonly string[], random: () => number = Math.random): string[] {
+  const result = [...choices]
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const other = Math.floor(random() * (index + 1))
+    ;[result[index], result[other]] = [result[other], result[index]]
+  }
+  return result
 }

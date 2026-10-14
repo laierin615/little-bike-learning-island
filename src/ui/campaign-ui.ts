@@ -6,8 +6,8 @@ import {
   CAMPAIGN_WORLDS,
   getCampaignLevel,
   getModeLabel,
+  shuffleChoices,
   type CampaignLevel,
-  type CampaignPrompt,
 } from '../game/campaign'
 import {
   CAMPAIGN_PROGRESS_KEY,
@@ -23,7 +23,8 @@ import {
 } from '../game/campaign-rules'
 import { LearningUi } from './learning-ui'
 import { Voice } from '../engine/voice'
-import { FEEDBACK, bubbleCorrect, connectCorrect, levelComplete, levelGuide, memoryCorrect, roundSpeech } from '../game/speech-lines'
+import { FEEDBACK, bubbleCorrect, connectCorrect, levelComplete, levelGuide, memoryCorrect, roundSpeech, traceGood, traceStart } from '../game/speech-lines'
+import { TRACE_GRID, scoreTrace } from '../game/trace-rules'
 
 const VOICE_KEY = 'shuziyin.voice-guidance.v1'
 const SOUND_KEY = 'shuziyin.sound-enabled.v1'
@@ -50,6 +51,8 @@ type Session = {
   matchesMade: number
   freshCells: number[]
   feedback: string
+  /** Shuffled answer order for the current shoot/relay round. */
+  choiceOrder: string[]
 }
 type CampaignView = 'map' | 'challenge' | 'complete' | 'practice'
 
@@ -72,6 +75,11 @@ export class CampaignUi {
   private soundEnabled = this.readSetting(SOUND_KEY, true)
   private voiceEnabled = this.readSetting(VOICE_KEY, true)
   private teacherUnlockAll = this.readSetting(TEACHER_KEY, false)
+  private riding = false
+  private skipRide: (() => void) | null = null
+  private lastPlayedLevel = 0
+  /** Finger strokes on the tracing canvas, in 0…1 canvas coordinates. */
+  private traceStrokes: Array<Array<[number, number]>> = []
   private readonly speechSupported = typeof window !== 'undefined'
     && 'speechSynthesis' in window
     && typeof SpeechSynthesisUtterance !== 'undefined'
@@ -121,7 +129,7 @@ export class CampaignUi {
     this.saveSetting(TEACHER_KEY, this.teacherUnlockAll)
     this.audio.play('ui')
     this.renderMap()
-    this.announcer.textContent = this.teacherUnlockAll ? '老師模式：24 關全部開放。' : '已回到闖關模式：完成一關才會開下一關。'
+    this.announcer.textContent = this.teacherUnlockAll ? `老師模式：${CAMPAIGN_LEVELS.length} 關全部開放。` : '已回到闖關模式：完成一關才會開下一關。'
   }
 
   private readProgress(): CampaignProgress {
@@ -181,24 +189,114 @@ export class CampaignUi {
 
     this.setScreen(`<main class="campaign-screen map-screen">
       <header class="campaign-header map-header">
-        <div class="campaign-brand"><span class="campaign-brand-mark" aria-hidden="true">🚴</span><div><p>小小單車學習島</p><small>${completed} / 24 關完成</small></div></div>
-        <div class="campaign-controls">${this.soundButtonMarkup()}${this.modeLabelMarkup()}<div class="campaign-stars" aria-label="共獲得 ${stars} 顆星">★ <strong>${stars}</strong><small> / 72</small></div></div>
+        <div class="campaign-brand"><span class="campaign-brand-mark" aria-hidden="true">🚴</span><div><p>小小單車學習島</p><small>${completed} / ${CAMPAIGN_LEVELS.length} 關完成</small></div></div>
+        <div class="campaign-controls">${this.soundButtonMarkup()}${this.modeLabelMarkup()}<div class="campaign-stars" aria-label="共獲得 ${stars} 顆星">★ <strong>${stars}</strong><small> / ${CAMPAIGN_LEVELS.length * 3}</small></div></div>
       </header>
       <h1 id="campaign-title" class="sr-only">騎單車逛糖果小鎮，收集甜甜學習星</h1>
-      <div class="campaign-map-scroll" role="region" aria-label="24 關騎行地圖">
+      <div class="campaign-map-scroll" role="region" aria-label="${CAMPAIGN_LEVELS.length} 關騎行地圖">
         ${this.roadMapMarkup(next, completed === CAMPAIGN_LEVELS.length)}
       </div>
-      <footer class="campaign-footer"><span>沒有倒數，答錯也沒關係，騎到哪裡都能回來再玩！</span><div class="footer-actions"><button class="teacher-toggle" type="button" data-action="teacher-unlock" aria-pressed="${this.teacherUnlockAll}" aria-label="老師模式：${this.teacherUnlockAll ? '目前全部開放，按一下回到逐關解鎖' : '目前逐關解鎖，按一下開放全部 24 關'}">${this.teacherUnlockAll ? '🔓 全部開放中' : '🔒 老師：全開'}</button><button class="practice-entry" type="button" data-action="practice">自由練習　›</button></div></footer>
-      <div class="sr-only" aria-live="polite">共有 24 關，已完成 ${completed} 關。選第一關開始騎行。</div>
+      <footer class="campaign-footer"><span>沒有倒數，答錯也沒關係，騎到哪裡都能回來再玩！</span><div class="footer-actions"><button class="teacher-toggle" type="button" data-action="teacher-unlock" aria-pressed="${this.teacherUnlockAll}" aria-label="老師模式：${this.teacherUnlockAll ? '目前全部開放，按一下回到逐關解鎖' : `目前逐關解鎖，按一下開放全部 ${CAMPAIGN_LEVELS.length} 關`}">${this.teacherUnlockAll ? '🔓 全部開放中' : '🔒 老師：全開'}</button><button class="practice-entry" type="button" data-action="practice">自由練習　›</button></div></footer>
+      <div class="sr-only" aria-live="polite">共有 ${CAMPAIGN_LEVELS.length} 關，已完成 ${completed} 關。選第一關開始騎行。</div>
     </main>`)
 
     const scroller = this.campaignRoot.querySelector<HTMLElement>('.campaign-map-scroll')
     const rider = this.campaignRoot.querySelector<HTMLElement>('.map-rider')
     if (scroller && rider) scroller.scrollTop = rider.offsetTop - scroller.clientHeight * 0.55
+    // Coming back from a challenge: start on that level's spot and ride on to the next stop.
+    const played = this.lastPlayedLevel
+    this.lastPlayedLevel = 0
+    const playedNode = played ? this.campaignRoot.querySelector<HTMLElement>(`[data-level="${played}"]`) : null
+    if (playedNode && rider && Number(playedNode.dataset.roadTop) !== Number(rider.dataset.homeTop)) {
+      this.rideTo(Number(rider.dataset.homeTop), () => {}, Number(playedNode.dataset.roadTop))
+    }
   }
 
   /**
-   * Candy-Crush-style scrolling road: level 1 at the bottom, level 24 at the top.
+   * Rides the map rider along the candy road to the spot at `targetTop` (px from the map top),
+   * scrolling the map with him, then calls `arrive`. Starts from his parking spot, or from the
+   * road point at `fromTop` when given. Skips the ride for reduced-motion players.
+   */
+  private rideTo(targetTop: number, arrive: () => void, fromTop?: number): void {
+    const map = this.campaignRoot.querySelector<HTMLElement>('.road-map')
+    const path = map?.querySelector<SVGPathElement>('.road-surface')
+    const rider = map?.querySelector<HTMLElement>('.map-rider')
+    const scroller = this.campaignRoot.querySelector<HTMLElement>('.campaign-map-scroll')
+    if (!map || !path || !rider || !scroller || matchMedia('(prefers-reduced-motion: reduce)').matches || !Number.isFinite(targetTop)) {
+      arrive()
+      return
+    }
+    const total = path.getTotalLength()
+    // The road runs bottom → top, so y shrinks as the length grows.
+    const lengthAt = (top: number) => {
+      let low = 0
+      let high = total
+      while (high - low > 0.5) {
+        const middle = (low + high) / 2
+        if (path.getPointAtLength(middle).y > top) low = middle
+        else high = middle
+      }
+      return (low + high) / 2
+    }
+    const place = (x: number, top: number, facingLeft: boolean) => {
+      rider.style.setProperty('--x', x.toFixed(3))
+      rider.style.top = `${top}px`
+      rider.classList.toggle('is-facing-left', facingLeft)
+      scroller.scrollTop = top - scroller.clientHeight * 0.55
+    }
+    const homeTop = Number(rider.dataset.homeTop)
+    const parkedX = Number(rider.style.getPropertyValue('--x'))
+    const parkedTop = parseFloat(rider.style.top)
+    const startLength = lengthAt(fromTop ?? homeTop)
+    const endLength = lengthAt(targetTop)
+    const startPoint = path.getPointAtLength(startLength)
+    const ridingHome = fromTop !== undefined
+    const roadMs = Math.min(3200, Math.max(900, Math.abs(endLength - startLength) * 1.7))
+    const hopMs = 260
+    const began = performance.now()
+    this.riding = true
+    rider.classList.add('is-riding')
+    let lastX = ridingHome ? startPoint.x : parkedX
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      this.riding = false
+      this.skipRide = null
+      rider.classList.remove('is-riding')
+      if (ridingHome) place(parkedX, parkedTop, false)
+      arrive()
+    }
+    this.skipRide = ridingHome ? finish : null
+    const frame = (now: number) => {
+      if (done) return
+      const elapsed = now - began
+      const leg1 = ridingHome ? 0 : hopMs
+      if (elapsed < leg1) {
+        const t = elapsed / leg1
+        place(parkedX + (startPoint.x - parkedX) * t, parkedTop + (startPoint.y - parkedTop) * t, startPoint.x < parkedX)
+      } else if (elapsed < leg1 + roadMs) {
+        const t = (elapsed - leg1) / roadMs
+        const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2
+        const point = path.getPointAtLength(startLength + (endLength - startLength) * eased)
+        place(point.x, point.y, point.x < lastX - 0.002 || (Math.abs(point.x - lastX) <= 0.002 && rider.classList.contains('is-facing-left')))
+        lastX = point.x
+      } else if (ridingHome && elapsed < leg1 + roadMs + hopMs) {
+        const t = (elapsed - leg1 - roadMs) / hopMs
+        const end = path.getPointAtLength(endLength)
+        place(end.x + (parkedX - end.x) * t, end.y + (parkedTop - end.y) * t, parkedX < end.x)
+      } else {
+        finish()
+        return
+      }
+      requestAnimationFrame(frame)
+    }
+    if (ridingHome) place(startPoint.x, startPoint.y, false)
+    requestAnimationFrame(frame)
+  }
+
+  /**
+   * Candy-Crush-style scrolling road: level 1 at the bottom, the last level at the top.
    * Vertical positions are pixels from the bottom; horizontal positions are -1…1,
    * scaled by the CSS `--amp` so the SVG road and the round level buttons line up.
    */
@@ -209,11 +307,12 @@ export class CampaignUi {
     const TOP = 170
     const levelY = (id: number) => BOTTOM + (id - 1) * STEP + Math.floor((id - 1) / 6) * GAP
     const levelX = (id: number) => Math.round(Math.sin((id - 1) * 0.92) * 82) / 100
-    const height = levelY(24) + TOP
+    const last = CAMPAIGN_LEVELS.length
+    const height = levelY(last) + TOP
     const top = (fromBottom: number) => height - fromBottom
     const ribbonY = (world: number) => (world === 0 ? 118 : levelY(world * 6) + (STEP + GAP) / 2)
     const start = { x: 0, y: 30 }
-    const finish = { x: 0, y: levelY(24) + 108 }
+    const finish = { x: 0, y: levelY(last) + 108 }
 
     const points = [start, ...CAMPAIGN_LEVELS.map(level => ({ x: levelX(level.id), y: levelY(level.id) })), finish]
     let road = `M ${points[0].x} ${top(points[0].y)}`
@@ -224,7 +323,7 @@ export class CampaignUi {
       road += ` C ${from.x} ${top(from.y + bend)} ${to.x} ${top(to.y - bend)} ${to.x} ${top(to.y)}`
     }
 
-    const scenery = ['🍎🍊🍓🌳🍐🌼', '🌲🍄🌳🦋🌿🐞', '🏠🍭🏡🧁🍬🎪', '⛰️🌈🎈🌸🏔️⭐'].map(set => Array.from(set.matchAll(/\p{Extended_Pictographic}️?/gu), match => match[0]))
+    const scenery = ['🍎🍊🍓🌳🍐🌼', '🌲🍄🌳🦋🌿🐞', '🏠🍭🏡🧁🍬🎪', '⛰️🌈🎈🌸🏔️⭐', '🌈🖍️✏️⭐☁️🎨'].map(set => Array.from(set.matchAll(/\p{Extended_Pictographic}️?/gu), match => match[0]))
     const zones = CAMPAIGN_WORLDS.map((world, index) => {
       const lower = index === 0 ? 0 : ribbonY(index) - 50
       const upper = index === CAMPAIGN_WORLDS.length - 1 ? height : ribbonY(index + 1) - 50
@@ -245,7 +344,7 @@ export class CampaignUi {
         const earned = this.progress[level.id] ?? 0
         const state = !unlocked ? 'locked' : earned ? 'completed' : level.id === next ? 'ready' : 'ready is-open'
         const accessible = `第 ${level.id} 關，${level.title}，${getModeLabel(level.mode)}。${unlocked ? earned ? `已完成，${earned} 顆星。` : '可以開始。' : '完成前一關後開放。'}挑戰內容：${level.story}`
-        return `<button class="campaign-node is-${state}" type="button" data-level="${level.id}" style="--world-color:${world.color};--x:${levelX(level.id)};top:${local(levelY(level.id))}px" aria-label="${html(accessible)}" ${unlocked ? '' : 'disabled'}>
+        return `<button class="campaign-node is-${state}" type="button" data-level="${level.id}" data-road-top="${top(levelY(level.id))}" style="--world-color:${world.color};--x:${levelX(level.id)};top:${local(levelY(level.id))}px" aria-label="${html(accessible)}" ${unlocked ? '' : 'disabled'}>
           <span class="node-number">${level.id}</span>
           <span class="node-bike" aria-hidden="true">${!unlocked ? '🔒' : earned ? '🏁' : level.id === next ? '⭐' : '🚴'}</span>
           <span class="node-title">${html(level.title)}</span>
@@ -271,7 +370,7 @@ export class CampaignUi {
       ${zones}
       <div class="map-landmark map-finish" style="--x:0;top:${top(finish.y)}px" aria-hidden="true"><span>🏰</span><strong>大終點</strong></div>
       <div class="map-landmark map-start" style="--x:0;top:${top(start.y + 20)}px" aria-hidden="true"><strong>出發！</strong></div>
-      <img class="map-rider" src="${riderImage}" alt="" style="--x:${rider.x.toFixed(2)};top:${top(rider.y)}px" />
+      <img class="map-rider" src="${riderImage}" alt="" data-home-top="${top(target.y)}" style="--x:${rider.x.toFixed(2)};top:${top(rider.y)}px" />
     </div>`
   }
 
@@ -288,7 +387,8 @@ export class CampaignUi {
     if (!this.isUnlocked(id)) return
     this.clearMemoryTimer()
     const level = getCampaignLevel(id)
-    this.audio.setMusicTheme(level.world as 1 | 2 | 3 | 4)
+    this.lastPlayedLevel = id
+    this.audio.setMusicTheme(level.world as 1 | 2 | 3 | 4 | 5)
     this.completedLevelId = 0
     this.view = 'challenge'
     this.session = {
@@ -307,12 +407,14 @@ export class CampaignUi {
         { pairKey: pair.key, label: pair.right },
       ])),
       flippedCards: [],
-      grid: createMatchBoard(level.matchSymbols),
+      grid: level.mode === 'match3' ? createMatchBoard(level.matchSymbols) : [],
       selectedCell: null,
       matchesMade: 0,
       freshCells: [],
       feedback: '',
+      choiceOrder: level.rounds[0] ? shuffleChoices(level.rounds[0].choices) : [],
     }
+    this.traceStrokes = []
     this.scene.setActivity(level.topic === 'mixed' ? null : level.topic)
     void this.audio.unlock()
     this.applySound()
@@ -322,8 +424,15 @@ export class CampaignUi {
     }
     this.renderChallenge()
     this.announcer.textContent = `${level.worldName}，第 ${level.id} 關，${level.title}。${level.challenge}`
-    const roundText = level.mode === 'shoot' || level.mode === 'relay' ? this.roundSpeech(level.rounds[0]) : ''
-    this.speakLevelGuide(level, roundText)
+    this.speakLevelGuide(level, this.currentPromptSpeech(level))
+  }
+
+  /** What to read after the level guide: the current question, or the symbol to trace. */
+  private currentPromptSpeech(level: CampaignLevel): string {
+    if (!this.session) return ''
+    if (level.mode === 'shoot' || level.mode === 'relay') return roundSpeech(level.rounds[this.session.roundIndex], this.session.choiceOrder)
+    if (level.mode === 'trace') return traceStart(level, level.traceSymbols[this.session.roundIndex])
+    return ''
   }
 
   private applySound(): void {
@@ -341,11 +450,13 @@ export class CampaignUi {
         ? this.memoryMarkup(level, this.session)
         : level.mode === 'match3'
           ? this.match3Markup(level, this.session)
-          : this.roundMarkup(level, this.session)
+          : level.mode === 'trace'
+            ? this.traceMarkup(level, this.session)
+            : this.roundMarkup(level, this.session)
     const progress = this.modeProgress(level, this.session)
     this.setScreen(`<main class="campaign-screen play-screen" data-level-id="${level.id}" data-campaign-mode="${level.mode}" style="--world-color:${level.color}">
       <header class="campaign-header play-header">
-        <button class="map-back" type="button" data-action="back-map" aria-label="回到 24 關地圖">‹ 地圖</button>
+        <button class="map-back" type="button" data-action="back-map" aria-label="回到關卡地圖">‹ 地圖</button>
         <div class="play-location"><span>第 ${level.id} 關</span><small>${html(level.worldName)}・${getModeLabel(level.mode)}</small></div>
         <div class="campaign-controls">${this.soundButtonMarkup()}${this.modeLabelMarkup()}</div>
       </header>
@@ -357,6 +468,7 @@ export class CampaignUi {
       <p class="campaign-gentle-hint">沒有計時；答錯也能再試，騎到終點就有星星。</p>
       <div class="sr-only" aria-live="polite">${html(this.session.feedback)}</div>
     </main>`)
+    if (level.mode === 'trace') this.setupTraceCanvas(level)
   }
 
   private modeProgress(level: CampaignLevel, session: Session): { current: number; total: number; label: string } {
@@ -365,6 +477,9 @@ export class CampaignUi {
     }
     if (level.mode === 'match3') {
       return { current: Math.min(session.matchesMade, level.matchTarget), total: level.matchTarget, label: `${Math.min(session.matchesMade, level.matchTarget)} / ${level.matchTarget} 次消除` }
+    }
+    if (level.mode === 'trace') {
+      return { current: session.correct, total: level.traceSymbols.length, label: `${session.correct} / ${level.traceSymbols.length} 個符號描好了` }
     }
     return { current: session.correct, total: level.rounds.length, label: `${session.correct} / ${level.rounds.length} 題補給` }
   }
@@ -389,7 +504,7 @@ export class CampaignUi {
 
   private roundMarkup(level: CampaignLevel, session: Session): string {
     const round = level.rounds[session.roundIndex]
-    const options = round.choices.map((choice, index) => `<button class="target-option ${session.roundAnswered && choice === round.answer ? 'is-correct' : ''}" type="button" data-round-choice="${html(choice)}" ${session.roundAnswered ? 'disabled' : ''} aria-label="選擇 ${html(choice)}，第 ${index + 1} 個目標"><span class="target-bubble" aria-hidden="true">${html(choice)}</span><small>泡泡 ${index + 1}</small></button>`).join('')
+    const options = session.choiceOrder.map((choice, index) => `<button class="target-option ${session.roundAnswered && choice === round.answer ? 'is-correct' : ''}" type="button" data-round-choice="${html(choice)}" ${session.roundAnswered ? 'disabled' : ''} aria-label="選擇 ${html(choice)}，第 ${index + 1} 個目標"><span class="target-bubble" aria-hidden="true">${html(choice)}</span><small>泡泡 ${index + 1}</small></button>`).join('')
     const icon = level.mode === 'shoot' ? '🎯' : '🏁'
     const label = level.mode === 'shoot' ? '泡泡射擊' : '接力挑戰'
     return `<div class="mode-instructions"><span class="mode-icon" aria-hidden="true">${icon}</span><div><strong>${label}</strong><small>看圖和題目，點一下正確的泡泡目標。</small></div><span class="round-number">${session.roundIndex + 1} / ${level.rounds.length}</span></div><div class="round-prompt"><div class="round-picture" role="img" aria-label="${html(round.pictureLabel)}">${html(round.picture)}</div><h2>${html(round.prompt)}</h2><p>選一個答案；答錯沒有關係。</p></div><div class="target-row" role="group" aria-label="選擇正確目標">${options}</div>`
@@ -425,7 +540,175 @@ export class CampaignUi {
     const nextId = level.id + 1
     const hasNext = nextId <= CAMPAIGN_LEVELS.length
     const nextUnlocked = hasNext && this.isUnlocked(nextId)
-    this.setScreen(`<main class="campaign-screen result-screen" style="--world-color:${level.color}"><section class="result-card" aria-labelledby="result-title"><div class="result-decoration" aria-hidden="true">✦　🚴　✦</div><span class="result-bike" aria-hidden="true">🏁</span><p class="campaign-kicker">${html(level.worldName)}・第 ${level.id} 關</p><h1 id="result-title">${level.id === 24 ? '騎到大終點！' : '太棒了！'}</h1><p class="result-copy">完成「${html(level.title)}」，又學會一個新本領。</p><div class="result-stars" aria-label="本關獲得 ${stars} 顆星">${'★'.repeat(stars)}${'☆'.repeat(3 - stars)}</div><p class="result-unlock">${hasNext ? `下一站「${html(getCampaignLevel(nextId).title)}」已開放。` : '24 關全部完成！你是單車學習小高手。'}</p>${nextUnlocked ? '<button class="campaign-primary" type="button" data-action="next-level">騎往下一關　›</button>' : ''}<button class="secondary-button" type="button" data-action="replay-level">再玩這一關</button><button class="text-button" type="button" data-action="back-map">回到關卡地圖</button></section></main>`)
+    this.setScreen(`<main class="campaign-screen result-screen" style="--world-color:${level.color}"><section class="result-card" aria-labelledby="result-title"><div class="result-decoration" aria-hidden="true">✦　🚴　✦</div><span class="result-bike" aria-hidden="true">🏁</span><p class="campaign-kicker">${html(level.worldName)}・第 ${level.id} 關</p><h1 id="result-title">${level.id === CAMPAIGN_LEVELS.length ? '騎到大終點！' : '太棒了！'}</h1><p class="result-copy">完成「${html(level.title)}」，又學會一個新本領。</p><div class="result-stars" aria-label="本關獲得 ${stars} 顆星">${'★'.repeat(stars)}${'☆'.repeat(3 - stars)}</div><p class="result-unlock">${hasNext ? `下一站「${html(getCampaignLevel(nextId).title)}」已開放。` : `${CAMPAIGN_LEVELS.length} 關全部完成！你是單車學習小高手。`}</p>${nextUnlocked ? '<button class="campaign-primary" type="button" data-action="next-level">騎往下一關　›</button>' : ''}<button class="secondary-button" type="button" data-action="replay-level">再玩這一關</button><button class="text-button" type="button" data-action="back-map">回到關卡地圖</button></section></main>`)
+  }
+
+  private traceMarkup(level: CampaignLevel, session: Session): string {
+    const symbol = level.traceSymbols[session.roundIndex]
+    const kind = level.topic === 'numbers' ? '數字' : '注音'
+    return `<div class="mode-instructions"><span class="mode-icon" aria-hidden="true">✏️</span><div><strong>描寫${kind}</strong><small>用手指沿著虛線描，描完按「寫好了」。</small></div><span class="round-number">${session.roundIndex + 1} / ${level.traceSymbols.length}</span></div>
+      <div class="trace-stage"><canvas class="trace-canvas" data-trace-symbol="${html(symbol)}" role="img" aria-label="描寫${kind} ${html(symbol)} 的畫布，用手指沿著虛線描"></canvas></div>
+      <div class="trace-actions"><button class="secondary-button" type="button" data-action="trace-clear">擦掉重寫</button><button class="campaign-primary" type="button" data-action="trace-check">寫好了　✓</button></div>`
+  }
+
+  /** Draws the fat symbol track (and its dashed outline when `guide`) centred in a size×size box. */
+  private drawTraceTrack(context: CanvasRenderingContext2D, size: number, symbol: string, color: string, guide: boolean): void {
+    context.save()
+    context.font = `900 ${Math.round(size * 0.72)}px "ManusCC0", "ManusCC0 Sans CJK SC", "Noto Sans TC", sans-serif`
+    context.textAlign = 'center'
+    context.textBaseline = 'alphabetic'
+    const metrics = context.measureText(symbol)
+    const y = size / 2 + (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2
+    context.lineJoin = 'round'
+    context.lineCap = 'round'
+    context.lineWidth = size * 0.1
+    context.strokeStyle = color
+    context.fillStyle = color
+    if (guide) context.globalAlpha = 0.24
+    context.strokeText(symbol, size / 2, y)
+    context.fillText(symbol, size / 2, y)
+    if (guide) {
+      context.globalAlpha = 0.95
+      context.setLineDash([size * 0.028, size * 0.024])
+      context.lineWidth = Math.max(2, size * 0.009)
+      context.strokeStyle = color
+      context.strokeText(symbol, size / 2, y)
+    }
+    context.restore()
+  }
+
+  private setupTraceCanvas(level: CampaignLevel): void {
+    const canvas = this.campaignRoot.querySelector<HTMLCanvasElement>('.trace-canvas')
+    const session = this.session
+    const context = canvas?.getContext('2d')
+    if (!canvas || !session || !context) return
+    const symbol = level.traceSymbols[session.roundIndex]
+    const size = canvas.clientWidth || 280
+    const ratio = Math.min(2, window.devicePixelRatio || 1)
+    canvas.width = Math.round(size * ratio)
+    canvas.height = Math.round(size * ratio)
+    context.scale(ratio, ratio)
+    const inkWidth = size * 0.075
+    const redraw = () => {
+      context.clearRect(0, 0, size, size)
+      // 田字格 guide lines.
+      context.save()
+      context.strokeStyle = '#f6c9dc'
+      context.lineWidth = 2
+      context.setLineDash([8, 8])
+      context.beginPath()
+      context.moveTo(size / 2, 10)
+      context.lineTo(size / 2, size - 10)
+      context.moveTo(10, size / 2)
+      context.lineTo(size - 10, size / 2)
+      context.stroke()
+      context.restore()
+      this.drawTraceTrack(context, size, symbol, level.color, true)
+      context.save()
+      context.strokeStyle = '#ff3f7f'
+      context.lineWidth = inkWidth
+      context.lineCap = 'round'
+      context.lineJoin = 'round'
+      for (const stroke of this.traceStrokes) {
+        context.beginPath()
+        stroke.forEach(([x, y], index) => (index === 0 ? context.moveTo(x * size, y * size) : context.lineTo(x * size, y * size)))
+        if (stroke.length === 1) context.lineTo(stroke[0][0] * size + 0.1, stroke[0][1] * size)
+        context.stroke()
+      }
+      context.restore()
+    }
+    redraw()
+    const point = (event: PointerEvent): [number, number] => {
+      const box = canvas.getBoundingClientRect()
+      return [Math.min(1, Math.max(0, (event.clientX - box.left) / box.width)), Math.min(1, Math.max(0, (event.clientY - box.top) / box.height))]
+    }
+    let drawing = false
+    canvas.addEventListener('pointerdown', event => {
+      event.preventDefault()
+      drawing = true
+      canvas.setPointerCapture(event.pointerId)
+      this.traceStrokes.push([point(event)])
+      redraw()
+    })
+    canvas.addEventListener('pointermove', event => {
+      if (!drawing) return
+      this.traceStrokes[this.traceStrokes.length - 1]?.push(point(event))
+      redraw()
+    })
+    const stop = () => { drawing = false }
+    canvas.addEventListener('pointerup', stop)
+    canvas.addEventListener('pointercancel', stop)
+  }
+
+  private clearTrace(): void {
+    this.traceStrokes = []
+    this.audio.play('ui')
+    if (this.session) this.session.feedback = ''
+    this.renderChallenge()
+  }
+
+  /** Rasterises the track and the ink onto the scoring grid and checks the trace. */
+  private checkTrace(): void {
+    if (!this.session || this.view !== 'challenge') return
+    const level = getCampaignLevel(this.session.levelId)
+    const symbol = level.traceSymbols[this.session.roundIndex]
+    if (this.traceStrokes.length === 0) {
+      this.session.feedback = FEEDBACK.traceEmpty
+      this.speak(this.session.feedback)
+      this.renderChallenge()
+      return
+    }
+    const grid = document.createElement('canvas')
+    grid.width = TRACE_GRID
+    grid.height = TRACE_GRID
+    const context = grid.getContext('2d', { willReadFrequently: true })
+    if (!context) return
+    const read = () => {
+      const pixels = context.getImageData(0, 0, TRACE_GRID, TRACE_GRID).data
+      const mask = new Uint8Array(TRACE_GRID * TRACE_GRID)
+      for (let index = 0; index < mask.length; index += 1) mask[index] = pixels[index * 4 + 3] > 60 ? 1 : 0
+      return mask
+    }
+    this.drawTraceTrack(context, TRACE_GRID, symbol, '#000', false)
+    const target = read()
+    context.clearRect(0, 0, TRACE_GRID, TRACE_GRID)
+    context.strokeStyle = '#000'
+    context.lineWidth = TRACE_GRID * 0.075
+    context.lineCap = 'round'
+    context.lineJoin = 'round'
+    for (const stroke of this.traceStrokes) {
+      context.beginPath()
+      stroke.forEach(([x, y], index) => (index === 0 ? context.moveTo(x * TRACE_GRID, y * TRACE_GRID) : context.lineTo(x * TRACE_GRID, y * TRACE_GRID)))
+      if (stroke.length === 1) context.lineTo(stroke[0][0] * TRACE_GRID + 0.1, stroke[0][1] * TRACE_GRID)
+      context.stroke()
+    }
+    const score = scoreTrace(target, read())
+    this.session.attempts += 1
+    if (!score.passed) {
+      this.session.mistakes += 1
+      this.session.feedback = score.coverage < 0.6 ? FEEDBACK.traceMore : FEEDBACK.traceOff
+      this.audio.play('wrong')
+      this.speak(this.session.feedback)
+      this.renderChallenge()
+      return
+    }
+    this.session.correct += 1
+    this.traceStrokes = []
+    this.scene.advanceRider()
+    this.audio.play('clear')
+    const praise = traceGood(level, symbol)
+    if (this.session.roundIndex + 1 >= level.traceSymbols.length) {
+      this.session.feedback = praise
+      this.renderChallenge()
+      this.speak(praise)
+      this.clearMemoryTimer()
+      this.memoryTimer = window.setTimeout(() => this.finishLevel(), 1100)
+      return
+    }
+    this.session.roundIndex += 1
+    this.session.feedback = praise
+    this.renderChallenge()
+    this.speak(`${praise}${traceStart(level, level.traceSymbols[this.session.roundIndex])}`)
   }
 
   private finishLevel(): void {
@@ -446,10 +729,17 @@ export class CampaignUi {
   }
 
   private onClick(event: MouseEvent): void {
+    if (this.riding) {
+      // A tap during the ride home finishes it at once; a ride into a level can't be interrupted.
+      if (!this.skipRide) return
+      this.skipRide()
+    }
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button')
     if (!button || button.disabled) return
     if (button.dataset.level) {
-      this.startLevel(Number(button.dataset.level))
+      const id = Number(button.dataset.level)
+      if (this.view === 'map') this.rideTo(Number(button.dataset.roadTop), () => this.startLevel(id))
+      else this.startLevel(id)
       return
     }
     const action = button.dataset.action
@@ -459,13 +749,14 @@ export class CampaignUi {
     else if (action === 'replay-level') this.startLevel(this.completedLevelId)
     else if (action === 'replay-guide' && this.session) {
       const level = getCampaignLevel(this.session.levelId)
-      const roundText = level.mode === 'shoot' || level.mode === 'relay' ? this.roundSpeech(level.rounds[this.session.roundIndex]) : ''
-      this.speakLevelGuide(level, roundText)
+      this.speakLevelGuide(level, this.currentPromptSpeech(level))
     }
     else if (action === 'advance-round') this.advanceRound()
     else if (action === 'sound-toggle') this.toggleSound()
     else if (action === 'voice-toggle') this.toggleVoice()
     else if (action === 'teacher-unlock') this.toggleTeacherUnlock()
+    else if (action === 'trace-clear') this.clearTrace()
+    else if (action === 'trace-check') this.checkTrace()
     else if (button.dataset.pairSide && button.dataset.pairKey) this.selectPair(button.dataset.pairSide, button.dataset.pairKey)
     else if (button.dataset.memoryCard !== undefined) this.flipMemoryCard(Number(button.dataset.memoryCard))
     else if (button.dataset.roundChoice) this.answerRound(button.dataset.roundChoice)
@@ -582,14 +873,11 @@ export class CampaignUi {
     this.session.roundIndex += 1
     this.session.roundAnswered = false
     this.session.feedback = ''
-    this.renderChallenge()
     const round = level.rounds[this.session.roundIndex]
-    this.announcer.textContent = this.roundSpeech(round)
-    this.speak(this.roundSpeech(round))
-  }
-
-  private roundSpeech(round: CampaignPrompt): string {
-    return roundSpeech(round)
+    this.session.choiceOrder = shuffleChoices(round.choices)
+    this.renderChallenge()
+    this.announcer.textContent = roundSpeech(round, this.session.choiceOrder)
+    this.speak(this.announcer.textContent)
   }
 
   private speakLevelGuide(level: CampaignLevel, roundText = ''): void {
@@ -688,7 +976,7 @@ export class CampaignUi {
     if (this.view !== 'challenge' || !this.session || !['1', '2', '3'].includes(event.key)) return
     const level = getCampaignLevel(this.session.levelId)
     if (level.mode !== 'shoot' && level.mode !== 'relay') return
-    const choice = level.rounds[this.session.roundIndex]?.choices[Number(event.key) - 1]
+    const choice = this.session.choiceOrder[Number(event.key) - 1]
     if (choice) {
       event.preventDefault()
       this.answerRound(choice)

@@ -1,4 +1,4 @@
-// End-to-end smoke test for the 24-level bicycle learning campaign.
+// End-to-end smoke test for the 30-level bicycle learning campaign.
 // Run after `pnpm build`; captures desktop and phone screenshots in ./shots/.
 import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
@@ -27,7 +27,7 @@ async function waitForServer() {
   throw new Error('preview server did not start')
 }
 function watchErrors(page, errors) {
-  page.on('console', message => message.type() === 'error' && errors.push(message.text()))
+  page.on('console', message => message.type() === 'error' && errors.push(`${message.text()} @ ${message.location().url}`))
   page.on('pageerror', error => errors.push(String(error)))
   page.on('response', response => response.status() >= 400 && errors.push(`HTTP ${response.status()} ${response.url()}`))
 }
@@ -157,6 +157,39 @@ async function finishMatch3(page) {
   }
   await page.waitForSelector('.result-screen')
 }
+/** Traces along the guide track (blue-tinted pixels) row by row, or scribbles across the canvas. */
+async function traceSymbol(page, scribble = false) {
+  const before = Number(await page.locator('.challenge-progress').getAttribute('aria-valuenow'))
+  await page.evaluate(scribble => {
+    const canvas = document.querySelector('.trace-canvas')
+    const width = canvas.width
+    const height = canvas.height
+    const data = canvas.getContext('2d').getImageData(0, 0, width, height).data
+    const box = canvas.getBoundingClientRect()
+    const fire = (type, x, y) => canvas.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, clientX: box.left + x / width * box.width, clientY: box.top + y / height * box.height }))
+    const stroke = (x1, y1, x2, y2) => { fire('pointerdown', x1, y1); fire('pointermove', (x1 + x2) / 2, (y1 + y2) / 2); fire('pointermove', x2, y2); fire('pointerup', x2, y2) }
+    if (scribble) {
+      for (let row = 0; row < 12; row += 1) stroke(0, row * height / 12, width, row * height / 12 + height / 24)
+      return
+    }
+    for (let y = 0; y < height; y += Math.round(height / 40)) {
+      let start = -1
+      for (let x = 0; x <= width; x += 1) {
+        const i = (y * width + x) * 4
+        const onTrack = x < width && data[i + 3] > 0 && data[i + 2] - data[i] > 25
+        if (onTrack && start < 0) start = x
+        if (!onTrack && start >= 0) {
+          if (x - start > 3) stroke(start, y, x - 1, y)
+          start = -1
+        }
+      }
+    }
+  }, scribble)
+  await page.locator('[data-action="trace-check"]').click()
+  if (scribble) return before
+  await page.waitForFunction(previous => Number(document.querySelector('.challenge-progress')?.getAttribute('aria-valuenow') ?? 0) > previous || Boolean(document.querySelector('.result-screen')), before)
+  return before
+}
 async function nextLevel(page, expectedId) {
   await page.locator('[data-action="next-level"]').click()
   await page.waitForSelector(`.play-screen[data-level-id="${expectedId}"]`)
@@ -171,15 +204,15 @@ try {
   const desktop = await browser.newContext({ viewport: { width: 1280, height: 800 }, locale: 'zh-TW' })
   const page = await openGame(desktop, errors)
   await page.screenshot({ path: `${out}/01-campaign-map-desktop.png` })
-  assert(await page.locator('[data-level]').count() === 24, 'Campaign map should show all 24 levels')
-  assert(await page.locator('.world-card').count() === 4, 'Campaign map should show four themed worlds')
-  for (const title of ['數字果園', '注音森林', '國字小鎮', '綜合山道']) {
+  assert(await page.locator('[data-level]').count() === 30, 'Campaign map should show all 30 levels')
+  assert(await page.locator('.world-card').count() === 5, 'Campaign map should show five themed worlds')
+  for (const title of ['數字果園', '注音森林', '國字小鎮', '綜合山道', '描寫彩虹路']) {
     assert(await page.getByText(title, { exact: true }).count() > 0, `Missing world ${title}`)
   }
   assert(!(await page.locator('[data-level="1"]').isDisabled()), 'First level should start unlocked')
   assert(await page.locator('[data-level="2"]').isDisabled(), 'Later levels should start locked')
   await page.locator('[data-action="teacher-unlock"]').click()
-  assert(!(await page.locator('[data-level="24"]').isDisabled()), 'Teacher mode should open every level')
+  assert(!(await page.locator('[data-level="30"]').isDisabled()), 'Teacher mode should open every level')
   await page.locator('[data-action="teacher-unlock"]').click()
   assert(await page.locator('[data-level="2"]').isDisabled(), 'Turning teacher mode off should restore step-by-step unlocking')
   const tweakCount = await page.evaluate(() => window.__game.tuning.controls.length)
@@ -198,7 +231,7 @@ try {
 
   await page.locator('[data-action="practice"]').click()
   await page.waitForSelector('.home-screen')
-  assert(await page.locator('.practice-root .campaign-return').count() === 1, 'Classic practice must link back to the 24-level map')
+  assert(await page.locator('.practice-root .campaign-return').count() === 1, 'Classic practice must link back to the campaign map')
   await page.locator('.practice-root .campaign-return').click()
   await page.waitForSelector('.map-screen')
 
@@ -276,10 +309,28 @@ try {
   assert(zhuyinSky !== numberSky, 'Zhuyin and number campaign levels should select distinct scene lighting')
   await page.screenshot({ path: `${out}/07-zhuyin-world-desktop.png` })
 
+  await page.locator('[data-action="back-map"]').click()
+  await page.waitForSelector('.map-screen')
+  await page.locator('[data-action="teacher-unlock"]').click()
+  await page.locator('[data-level="28"]').click()
+  await page.waitForSelector('.play-screen[data-level-id="28"][data-campaign-mode="trace"]')
+  await page.waitForSelector('.trace-canvas')
+  await page.locator('[data-action="trace-check"]').click()
+  assert(await page.locator('.challenge-progress').getAttribute('aria-valuenow') === '0', 'An empty tracing canvas must not pass')
+  await traceSymbol(page, true)
+  assert(await page.locator('.challenge-progress').getAttribute('aria-valuenow') === '0', 'Scribbling over the whole canvas must not pass')
+  await page.screenshot({ path: `${out}/10-trace-scribble-desktop.png` })
+  await page.locator('[data-action="trace-clear"]').click()
+  for (let symbol = 0; symbol < 3; symbol += 1) await traceSymbol(page)
+  await page.waitForSelector('.result-screen')
+  await page.locator('[data-action="back-map"]').click()
+  await page.waitForSelector('.map-screen')
+  await page.locator('[data-action="teacher-unlock"]').click()
+
   await desktop.close()
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'zh-TW' })
   const phonePage = await openGame(phone, errors)
-  assert(await phonePage.locator('[data-level]').count() === 24, 'Phone map should still expose all 24 levels')
+  assert(await phonePage.locator('[data-level]').count() === 30, 'Phone map should still expose all 30 levels')
   const mapHeight = await phonePage.locator('.campaign-map-scroll').evaluate(element => element.scrollHeight > element.clientHeight)
   assert(mapHeight, 'The four campaign worlds should scroll on a phone')
   await phonePage.screenshot({ path: `${out}/08-campaign-map-phone.png`, fullPage: true })
@@ -297,7 +348,7 @@ try {
   if (errors.length) throw new Error(`console errors:\n  ${errors.join('\n  ')}`)
   await browser.close()
   cleanup()
-  console.log(`smoke: OK — campaign map, connect, memory, bubble shooting, match-three, relay, audio and phone touch; screenshots in ${out}/`)
+  console.log(`smoke: OK — campaign map, connect, memory, bubble shooting, match-three, relay, audio and phone touch, tracing; screenshots in ${out}/`)
 } catch (error) {
   await fail(error?.message ?? String(error))
 }

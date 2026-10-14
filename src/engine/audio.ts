@@ -4,7 +4,7 @@
  */
 export type Sfx = 'pickup' | 'jump' | 'land' | 'hurt' | 'ui' | 'win' | 'lose' | 'dash' | 'match' | 'shoot' | 'clear' | 'wrong'
 
-export type MusicTheme = 'map' | 1 | 2 | 3 | 4
+export type MusicTheme = 'map' | 1 | 2 | 3 | 4 | 5
 
 type Theme = { bpm: number; root: number; lead: 'marimba' | 'glock'; alternate: boolean; walk: boolean }
 /** Map theme plus one flavour per world: 果園、森林、小鎮、山道. Roots are MIDI note numbers. */
@@ -14,6 +14,7 @@ const THEMES: Record<MusicTheme, Theme> = {
   2: { bpm: 104, root: 67, lead: 'glock', alternate: true, walk: false },
   3: { bpm: 126, root: 60, lead: 'marimba', alternate: true, walk: true },
   4: { bpm: 112, root: 62, lead: 'glock', alternate: true, walk: true },
+  5: { bpm: 108, root: 64, lead: 'glock', alternate: true, walk: false },
 }
 /** I – vi – IV – V, as semitone offsets from the theme root. */
 const PROGRESSION = [[0, 4, 7], [-3, 0, 4], [5, 9, 12], [7, 11, 14]]
