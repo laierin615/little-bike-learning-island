@@ -1,3 +1,4 @@
+import riderImage from '../../assets/images/bike-rider.png'
 import type { Audio } from '../engine/audio'
 import { LearningScene } from '../game/learning-scene'
 import {
@@ -21,6 +22,8 @@ import {
   type CampaignProgress,
 } from '../game/campaign-rules'
 import { LearningUi } from './learning-ui'
+import { Voice } from '../engine/voice'
+import { FEEDBACK, bubbleCorrect, connectCorrect, levelComplete, levelGuide, memoryCorrect, roundSpeech } from '../game/speech-lines'
 
 const VOICE_KEY = 'shuziyin.voice-guidance.v1'
 const SOUND_KEY = 'shuziyin.sound-enabled.v1'
@@ -156,47 +159,105 @@ export class CampaignUi {
     this.campaignRoot.hidden = false
     this.practiceRoot.hidden = true
     this.scene.setActivity(null)
+    this.audio.setMusicTheme('map')
     const completed = Object.keys(this.progress).length
     const stars = totalCampaignStars(this.progress)
-    const worlds = CAMPAIGN_WORLDS.map(world => {
+    const next = Math.min(CAMPAIGN_LEVELS.length, Math.max(1, ...Object.keys(this.progress).map(Number).filter(Number.isFinite).map(id => id + 1)))
+
+    this.setScreen(`<main class="campaign-screen map-screen">
+      <header class="campaign-header map-header">
+        <div class="campaign-brand"><span class="campaign-brand-mark" aria-hidden="true">🚴</span><div><p>小小單車學習島</p><small>${completed} / 24 關完成</small></div></div>
+        <div class="campaign-controls">${this.soundButtonMarkup()}${this.modeLabelMarkup()}<div class="campaign-stars" aria-label="共獲得 ${stars} 顆星">★ <strong>${stars}</strong><small> / 72</small></div></div>
+      </header>
+      <h1 id="campaign-title" class="sr-only">騎單車逛糖果小鎮，收集甜甜學習星</h1>
+      <div class="campaign-map-scroll" role="region" aria-label="24 關騎行地圖">
+        ${this.roadMapMarkup(next, completed === CAMPAIGN_LEVELS.length)}
+      </div>
+      <footer class="campaign-footer"><span>沒有倒數，答錯也沒關係，騎到哪裡都能回來再玩！</span><button class="practice-entry" type="button" data-action="practice">自由練習　›</button></footer>
+      <div class="sr-only" aria-live="polite">共有 24 關，已完成 ${completed} 關。選第一關開始騎行。</div>
+    </main>`)
+
+    const scroller = this.campaignRoot.querySelector<HTMLElement>('.campaign-map-scroll')
+    const rider = this.campaignRoot.querySelector<HTMLElement>('.map-rider')
+    if (scroller && rider) scroller.scrollTop = rider.offsetTop - scroller.clientHeight * 0.55
+  }
+
+  /**
+   * Candy-Crush-style scrolling road: level 1 at the bottom, level 24 at the top.
+   * Vertical positions are pixels from the bottom; horizontal positions are -1…1,
+   * scaled by the CSS `--amp` so the SVG road and the round level buttons line up.
+   */
+  private roadMapMarkup(next: number, allDone: boolean): string {
+    const STEP = 122
+    const GAP = 104
+    const BOTTOM = 200
+    const TOP = 170
+    const levelY = (id: number) => BOTTOM + (id - 1) * STEP + Math.floor((id - 1) / 6) * GAP
+    const levelX = (id: number) => Math.round(Math.sin((id - 1) * 0.92) * 82) / 100
+    const height = levelY(24) + TOP
+    const top = (fromBottom: number) => height - fromBottom
+    const ribbonY = (world: number) => (world === 0 ? 118 : levelY(world * 6) + (STEP + GAP) / 2)
+    const start = { x: 0, y: 30 }
+    const finish = { x: 0, y: levelY(24) + 108 }
+
+    const points = [start, ...CAMPAIGN_LEVELS.map(level => ({ x: levelX(level.id), y: levelY(level.id) })), finish]
+    let road = `M ${points[0].x} ${top(points[0].y)}`
+    for (let index = 1; index < points.length; index += 1) {
+      const from = points[index - 1]
+      const to = points[index]
+      const bend = (to.y - from.y) / 2
+      road += ` C ${from.x} ${top(from.y + bend)} ${to.x} ${top(to.y - bend)} ${to.x} ${top(to.y)}`
+    }
+
+    const scenery = ['🍎🍊🍓🌳🍐🌼', '🌲🍄🌳🦋🌿🐞', '🏠🍭🏡🧁🍬🎪', '⛰️🌈🎈🌸🏔️⭐'].map(set => Array.from(set.matchAll(/\p{Extended_Pictographic}️?/gu), match => match[0]))
+    const zones = CAMPAIGN_WORLDS.map((world, index) => {
+      const lower = index === 0 ? 0 : ribbonY(index) - 50
+      const upper = index === CAMPAIGN_WORLDS.length - 1 ? height : ribbonY(index + 1) - 50
+      const zoneTop = top(upper)
+      const local = (fromBottom: number) => top(fromBottom) - zoneTop
       const worldCompleted = world.levels.filter(level => (this.progress[level.id] ?? 0) > 0).length
+
+      const decorations = world.levels.flatMap(level => {
+        const side = levelX(level.id) >= 0 ? -1 : 1
+        const items = [{ x: side * (1.3 + ((level.id * 37) % 30) / 100), y: levelY(level.id) + ((level.id * 53) % 70) - 35, size: 34 + ((level.id * 13) % 16) }]
+        if (Math.abs(levelX(level.id)) < 0.55) items.push({ x: -side * (1.4 + ((level.id * 29) % 25) / 100), y: levelY(level.id) + 40, size: 30 })
+        for (const far of [-1, 1]) items.push({ x: far * (2.1 + ((level.id * (far > 0 ? 41 : 23)) % 70) / 100), y: levelY(level.id) + ((level.id * (far > 0 ? 31 : 47)) % 90) - 45, size: 40 + ((level.id * 11) % 22) })
+        return items.map((item, offset) => `<span class="map-deco${Math.abs(item.x) > 1.9 ? ' deco-far' : ''}" style="--x:${item.x.toFixed(2)};top:${local(item.y)}px;font-size:${item.size}px">${scenery[index][(level.id * 7 + offset * 3) % scenery[index].length]}</span>`)
+      }).join('')
+
       const nodes = world.levels.map(level => {
         const unlocked = isLevelUnlocked(level.id, this.progress)
         const earned = this.progress[level.id] ?? 0
         const state = !unlocked ? 'locked' : earned ? 'completed' : 'ready'
         const accessible = `第 ${level.id} 關，${level.title}，${getModeLabel(level.mode)}。${unlocked ? earned ? `已完成，${earned} 顆星。` : '可以開始。' : '完成前一關後開放。'}挑戰內容：${level.story}`
-        return `<button class="campaign-node is-${state}" type="button" data-level="${level.id}" style="--world-color:${world.color}" aria-label="${html(accessible)}" ${unlocked ? '' : 'disabled'}>
+        return `<button class="campaign-node is-${state}" type="button" data-level="${level.id}" style="--world-color:${world.color};--x:${levelX(level.id)};top:${local(levelY(level.id))}px" aria-label="${html(accessible)}" ${unlocked ? '' : 'disabled'}>
           <span class="node-number">${level.id}</span>
-          <span class="node-bike" aria-hidden="true">${!unlocked ? '🔒' : earned ? '🏁' : '🚴'}</span>
+          <span class="node-bike" aria-hidden="true">${!unlocked ? '🔒' : earned ? '🏁' : level.id === next ? '⭐' : '🚴'}</span>
           <span class="node-title">${html(level.title)}</span>
           <span class="node-stars" aria-label="${earned} 顆星">${earned ? '★'.repeat(earned) + '☆'.repeat(3 - earned) : '☆☆☆'}</span>
         </button>`
       }).join('')
-      return `<section class="world-card" style="--world-color:${world.color}" aria-labelledby="world-${world.id}">
-        <header class="world-heading"><span class="world-icon" aria-hidden="true">${world.icon}</span><div class="world-heading-copy"><p>路段 ${world.id}</p><h2 id="world-${world.id}">${html(world.name)}</h2><small>${html(world.description)}</small></div><span class="world-count">${worldCompleted}<small> / 6</small></span></header>
-        <div class="world-track" role="group" aria-label="${html(world.name)}六個關卡">${nodes}</div>
+
+      return `<section class="world-card road-zone road-zone-${world.id}" style="--world-color:${world.color};top:${zoneTop}px;height:${upper - lower}px" aria-labelledby="world-${world.id}">
+        <div class="zone-ribbon" style="top:${local(ribbonY(index))}px"><span aria-hidden="true">${world.icon}</span><h2 id="world-${world.id}">${html(world.name)}</h2><small>${worldCompleted} / 6</small></div>
+        <div aria-hidden="true">${decorations}</div>
+        <div role="group" aria-label="${html(world.name)}六個關卡">${nodes}</div>
       </section>`
     }).join('')
 
-    this.setScreen(`<main class="campaign-screen map-screen">
-      <header class="campaign-header map-header">
-        <div class="campaign-brand"><span class="campaign-brand-mark" aria-hidden="true">🚴</span><div><p>小小單車學習島</p><small>24 站學習冒險</small></div></div>
-        <div class="campaign-controls">${this.soundButtonMarkup()}${this.modeLabelMarkup()}<div class="campaign-stars" aria-label="共獲得 ${stars} 顆星">★ <strong>${stars}</strong><small> / 72</small></div></div>
-      </header>
-      <section class="campaign-intro" aria-labelledby="campaign-title">
-        <div><p class="campaign-kicker">踩踏板，慢慢闖關</p><h1 id="campaign-title">沿著單車小路<br><em>收集學習星星</em></h1><p class="campaign-copy">${completed} / 24 關完成　・　${stars} 顆里程星</p></div>
-        <div class="campaign-progress-card"><span aria-hidden="true">🚲</span><div><strong>不用趕路</strong><small>答錯沒關係，通關就能開下一站</small></div></div>
-      </section>
-      <div class="campaign-map-scroll" role="region" aria-label="24 關騎行地圖">
-        <div class="world-list">${worlds}</div>
-        <p class="map-note">沒有倒數，也不會扣星星。騎到哪裡，都可以回來再玩。</p>
-      </div>
-      <footer class="campaign-footer"><span>戴好安全帽，準備出發！</span><button class="practice-entry" type="button" data-action="practice">自由練習　›</button></footer>
-      <div class="sr-only" aria-live="polite">共有 24 關，已完成 ${completed} 關。選第一關開始騎行。</div>
-    </main>`)
+    // The rider waits beside the current challenge, on the side facing the middle of the map.
+    const target = allDone ? finish : { x: levelX(next), y: levelY(next) }
+    const rider = { x: target.x + (target.x > 0.05 ? -0.86 : 0.86), y: target.y - 42 }
 
-    const next = Math.min(CAMPAIGN_LEVELS.length, Math.max(1, ...Object.keys(this.progress).map(Number).filter(Number.isFinite).map(id => id + 1)))
-    window.setTimeout(() => this.campaignRoot.querySelector<HTMLButtonElement>(`[data-level="${next}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 80)
+    return `<div class="road-map" style="height:${height}px">
+      <svg class="road-svg" viewBox="-1 0 2 ${height}" preserveAspectRatio="none" aria-hidden="true">
+        <path class="road-edge" d="${road}" /><path class="road-surface" d="${road}" /><path class="road-dash" d="${road}" />
+      </svg>
+      ${zones}
+      <div class="map-landmark map-finish" style="--x:0;top:${top(finish.y)}px" aria-hidden="true"><span>🏰</span><strong>大終點</strong></div>
+      <div class="map-landmark map-start" style="--x:0;top:${top(start.y + 20)}px" aria-hidden="true"><strong>出發！</strong></div>
+      <img class="map-rider" src="${riderImage}" alt="" style="--x:${rider.x.toFixed(2)};top:${top(rider.y)}px" />
+    </div>`
   }
 
   private enterPractice(): void {
@@ -212,6 +273,7 @@ export class CampaignUi {
     if (!isLevelUnlocked(id, this.progress)) return
     this.clearMemoryTimer()
     const level = getCampaignLevel(id)
+    this.audio.setMusicTheme(level.world as 1 | 2 | 3 | 4)
     this.completedLevelId = 0
     this.view = 'challenge'
     this.session = {
@@ -319,7 +381,7 @@ export class CampaignUi {
   }
 
   private match3Markup(level: CampaignLevel, session: Session): string {
-    const tiles = session.grid.map((symbol, index) => `<button class="match-tile ${session.selectedCell === index ? 'is-selected' : ''} ${session.freshCells.includes(index) ? 'is-fresh' : ''}" type="button" role="gridcell" data-match-cell="${index}" aria-label="第 ${Math.floor(index / 5) + 1} 排第 ${index % 5 + 1} 格，${html(symbol)}" aria-pressed="${session.selectedCell === index}">${html(symbol)}</button>`).join('')
+    const tiles = session.grid.map((symbol, index) => `<button class="match-tile ${session.selectedCell === index ? 'is-selected' : ''} ${session.freshCells.includes(index) ? 'is-fresh' : ''}" type="button" role="gridcell" data-match-cell="${index}" data-candy="${level.matchSymbols.indexOf(symbol) % 6}" aria-label="第 ${Math.floor(index / 5) + 1} 排第 ${index % 5 + 1} 格，${html(symbol)}" aria-pressed="${session.selectedCell === index}">${html(symbol)}</button>`).join('')
     return `<div class="mode-instructions"><span class="mode-icon" aria-hidden="true">🚲</span><div><strong>車輪消消樂</strong><small>先點一塊，再點旁邊圖塊交換位置。</small></div><span class="match-symbols">${level.matchSymbols.map(html).join('　')}</span></div><p class="match-instruction">把三個相同符號排在同一列或同一行，就能收下一顆星。</p><div class="match-grid" role="grid" aria-label="5 乘 5 消消樂棋盤">${tiles}</div>`
   }
 
@@ -365,7 +427,7 @@ export class CampaignUi {
     this.renderComplete()
     const level = getCampaignLevel(levelId)
     this.announcer.textContent = `太棒了！完成「${level.title}」，獲得 ${this.progress[levelId]} 顆星。下一關已開放。`
-    this.speak(`太棒了！完成${level.title}，獲得 ${this.progress[levelId]} 顆星。騎到終點啦！`)
+    this.speak(levelComplete(level, this.progress[levelId] ?? 1))
   }
 
   private onClick(event: MouseEvent): void {
@@ -405,10 +467,10 @@ export class CampaignUi {
         const pair = level.pairs.find(candidate => candidate.key === key)!
         this.session.matchedPairs.push(key)
         this.session.correct += 1
-        this.session.feedback = `連對了！${pair.learningNote}`
+        this.session.feedback = connectCorrect(pair)
         this.scene.advanceRider()
         this.audio.play('match')
-        this.speak(`連對了！${pair.learningNote}`)
+        this.speak(connectCorrect(pair))
         const done = this.session.matchedPairs.length >= level.pairs.length
         if (done) {
           this.finishLevel()
@@ -416,7 +478,7 @@ export class CampaignUi {
         }
       } else {
         this.session.mistakes += 1
-        this.session.feedback = '這兩張還不是好朋友，換一張再找找看！'
+        this.session.feedback = FEEDBACK.connectWrong
         this.audio.play('wrong')
         this.speak(this.session.feedback)
       }
@@ -449,7 +511,7 @@ export class CampaignUi {
       this.session.correct += 1
       this.scene.advanceRider()
       this.audio.play('match')
-      this.speak(`配對成功！${pair.learningNote}`)
+      this.speak(memoryCorrect(pair))
       if (this.session.matchedPairs.length >= level.pairs.length) {
         this.finishLevel()
         return
@@ -457,7 +519,7 @@ export class CampaignUi {
     } else {
       this.session.flippedCards = [firstIndex, index]
       this.session.mistakes += 1
-      this.session.feedback = '先看一看這兩張，再試著記住位置。慢慢來！'
+      this.session.feedback = FEEDBACK.memoryWrong
       this.audio.play('wrong')
     }
     this.renderChallenge()
@@ -479,13 +541,13 @@ export class CampaignUi {
     if (choice === round.answer) {
       this.session.correct += 1
       this.session.roundAnswered = true
-      this.session.feedback = `答對了！${round.explanation}`
+      this.session.feedback = bubbleCorrect(round)
       this.scene.advanceRider()
       this.audio.play(level.mode === 'shoot' ? 'shoot' : 'match')
       this.speak(this.session.feedback)
     } else {
       this.session.mistakes += 1
-      this.session.feedback = '差一點！再看看圖，換一個泡泡試試看。'
+      this.session.feedback = FEEDBACK.bubbleWrong
       this.audio.play('wrong')
       this.speak(this.session.feedback)
     }
@@ -511,11 +573,11 @@ export class CampaignUi {
   }
 
   private roundSpeech(round: CampaignPrompt): string {
-    return `${round.prompt}。答案選項：${round.choices.join('、')}。`
+    return roundSpeech(round)
   }
 
   private speakLevelGuide(level: CampaignLevel, roundText = ''): void {
-    this.speak(`${level.worldName}。第 ${level.id} 關，${level.title}。${level.challenge}${roundText}`)
+    this.speak(levelGuide(level, roundText))
   }
 
   private selectMatchCell(index: number): void {
@@ -545,7 +607,7 @@ export class CampaignUi {
       } else {
         this.session.selectedCell = null
         this.session.mistakes += 1
-        this.session.feedback = '還沒排成三個相同符號，沒關係，再試另一條路！'
+        this.session.feedback = FEEDBACK.matchNoLine
         this.audio.play('wrong')
         this.speak(this.session.feedback)
       }
@@ -559,7 +621,7 @@ export class CampaignUi {
     this.session.selectedCell = null
     this.session.matchesMade += Math.max(1, Math.floor(result.matched.length / 3))
     this.session.correct += 1
-    this.session.feedback = '消除成功！單車再前進一段路。'
+    this.session.feedback = FEEDBACK.matchCleared
     this.scene.advanceRider()
     this.audio.play('clear')
     this.speak(this.session.feedback)
@@ -593,15 +655,9 @@ export class CampaignUi {
   }
 
   private speak(text: string): void {
-    if (!this.speechSupported || !this.voiceEnabled) return
+    if (!this.voiceEnabled) return
     try {
-      window.speechSynthesis.cancel()
-      const utterance = new SpeechSynthesisUtterance(text.replace(/\p{Extended_Pictographic}/gu, '').replace(/\uFE0F/g, '').replace(/\s+/g, ' ').trim())
-      utterance.lang = 'zh-TW'
-      utterance.rate = 0.9
-      utterance.pitch = 1.02
-      utterance.volume = 1
-      window.speechSynthesis.speak(utterance)
+      if (!Voice.for(this.audio).speak(text, 0.9)) this.announcer.textContent = '語音暫時無法播放，請依照畫面文字繼續。'
     } catch {
       this.announcer.textContent = '語音暫時無法播放，請依照畫面文字繼續。'
     }

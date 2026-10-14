@@ -200,7 +200,7 @@ try {
 
   await page.locator('[data-level="1"]').click()
   await page.waitForSelector('.play-screen[data-level-id="1"][data-campaign-mode="connect"]')
-  const numberSky = await page.evaluate(() => window.__game.game.scene.background.getHexString())
+  const numberSky = await page.evaluate(() => { const sky = window.__game.game.scene.background; return sky.isColor ? sky.getHexString() : sky.uuid })
   assert(await page.locator('.challenge-heading').innerText().then(text => text.includes('數字果園') && text.includes('連連看')), 'Level 1 needs a number story and Connect mode')
   const intro = await page.evaluate(() => window.__speechLog[0])
   assert(intro?.text.includes('數字果園') && intro.lang === 'zh-TW', 'Campaign intro should use Traditional Chinese voice guidance')
@@ -268,7 +268,7 @@ try {
   await page.waitForSelector('.play-screen[data-level-id="7"]')
   const zhuyinStory = await page.locator('.challenge-heading').innerText()
   assert(zhuyinStory.includes('注音森林') && zhuyinStory.includes('注音'), 'The second world should explain its Zhuyin learning challenge')
-  const zhuyinSky = await page.evaluate(() => window.__game.game.scene.background.getHexString())
+  const zhuyinSky = await page.evaluate(() => { const sky = window.__game.game.scene.background; return sky.isColor ? sky.getHexString() : sky.uuid })
   assert(zhuyinSky !== numberSky, 'Zhuyin and number campaign levels should select distinct scene lighting')
   await page.screenshot({ path: `${out}/07-zhuyin-world-desktop.png` })
 

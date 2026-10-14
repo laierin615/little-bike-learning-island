@@ -1,6 +1,7 @@
 import './styles/main.css'
 import './ui/learning-ui.css'
 import './ui/campaign-ui.css'
+import './styles/candy-theme.css'
 import { Audio } from './engine/audio'
 import { GameLoop } from './engine/loop'
 import { Renderer } from './engine/renderer'

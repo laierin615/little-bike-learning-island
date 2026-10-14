@@ -29,7 +29,7 @@ export const ACTIVITIES: Activity[] = [
     subtitle: '騎到果園數一數，再選出數字',
     description: '在數字果園幫忙採收：數一數圖片裡的水果與星星，再選出正確數字。答對一道題，騎士就會前進到下一個路標。',
     icon: '🍎',
-    color: '#45aa75',
+    color: '#e8336f',
     pictureLabel: '數量圖卡',
     questions: [
       { prompt: '數一數，有幾顆蘋果？', picture: '🍎', pictureLabel: '紅蘋果', objects: ['🍎', '🍎', '🍎'], choices: ['2', '3', '4'], answer: '3', memoryTip: '一顆、兩顆、三顆蘋果，答案是 3。' },
@@ -45,7 +45,7 @@ export const ACTIVITIES: Activity[] = [
     subtitle: '騎進森林，看圖找第一個注音',
     description: '騎進注音森林，先看圖想想詞語開頭的聲音，再選出第一個注音。每答對一題，就前進到下一個森林路標。',
     icon: '🔤',
-    color: '#438bbd',
+    color: '#11a37f',
     pictureLabel: '圖片提示',
     questions: [
       { prompt: '「貓咪」的第一個注音是什麼？', picture: '🐱', pictureLabel: '貓咪', word: '貓咪', choices: ['ㄅ', 'ㄇ', 'ㄍ'], answer: 'ㄇ', memoryTip: '貓咪的第一個注音是 ㄇ。' },
@@ -61,7 +61,7 @@ export const ACTIVITIES: Activity[] = [
     subtitle: '騎到認字小屋，看圖記住簡單漢字',
     description: '騎到認字小屋，將圖片和簡單漢字連起來。想一想圖像特徵，就能把字記得更牢。',
     icon: '🖼️',
-    color: '#c88342',
+    color: '#ec6a12',
     pictureLabel: '圖片記憶卡',
     questions: [
       { prompt: '看圖找一找，「太陽」是哪個字？', picture: '☀️', pictureLabel: '太陽', word: '太陽', choices: ['日', '月', '山'], answer: '日', memoryTip: '☀️ 太陽像「日」，白天會看到日。' },

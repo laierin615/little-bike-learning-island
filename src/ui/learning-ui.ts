@@ -1,4 +1,6 @@
 import type { Audio } from '../engine/audio'
+import { Voice } from '../engine/voice'
+import { FEEDBACK, practiceComplete, practiceCorrect, practiceIntro, practiceQuestion } from '../game/speech-lines'
 import { ACTIVITIES, answerIsCorrect, getActivity, type ActivityId, type LessonQuestion } from '../game/lessons'
 import { LearningScene } from '../game/learning-scene'
 
@@ -78,13 +80,13 @@ export class LearningUi {
       this.audio.play('pickup')
       this.announcer.textContent = `答對了！${question.memoryTip}`
     } else {
-      this.feedback = '看看路邊的圖卡，再慢慢想一想。不用急，還可以再試！'
+      this.feedback = FEEDBACK.practiceWrong
       this.audio.play('ui')
       this.announcer.textContent = this.feedback
     }
     this.renderLesson()
     this.speak(this.answered
-      ? `答對了！${question.memoryTip}。太好了，騎到下一個路標！`
+      ? practiceCorrect(question)
       : this.feedback)
     if (!this.answered) this.root.querySelector<HTMLButtonElement>('.answer-option:not([disabled])')?.focus({ preventScroll: true })
     else this.root.querySelector<HTMLButtonElement>('[data-action="next"]')?.focus({ preventScroll: true })
@@ -107,7 +109,7 @@ export class LearningUi {
     this.view = 'complete'
     this.renderComplete(activity.title)
     this.audio.play('win')
-    this.speak(`太棒了！你完成了${activity.title}，騎到終點啦！`)
+    this.speak(practiceComplete(activity))
   }
 
   private renderLesson(): void {
@@ -256,9 +258,7 @@ export class LearningUi {
 
   private speakLevelIntro(): void {
     if (!this.activityId) return
-    const activity = getActivity(this.activityId)
-    const question = activity.questions[this.questionIndex]
-    this.speak(`${activity.title}。${activity.description}。${this.questionText(question, this.questionIndex)}`)
+    this.speak(practiceIntro(getActivity(this.activityId), this.questionIndex))
   }
 
   private speakQuestion(): void {
@@ -268,24 +268,18 @@ export class LearningUi {
   }
 
   private questionText(question: LessonQuestion, index: number): string {
-    return `第 ${index + 1} 題。${question.prompt}。答案選項：${question.choices.join('、')}。`
+    return practiceQuestion(question, index)
   }
 
   private speak(text: string): void {
-    if (!this.speechSupported || !this.voiceEnabled) return
+    if (!this.voiceEnabled) return
     try {
-      window.speechSynthesis.cancel()
-      const spokenText = text.replace(/\p{Extended_Pictographic}/gu, '').replace(/\uFE0F/g, '').replace(/\s+/g, ' ').trim()
-      const utterance = new SpeechSynthesisUtterance(spokenText)
-      utterance.lang = 'zh-TW'
-      utterance.rate = 0.88
-      utterance.pitch = 1.02
-      utterance.volume = 1
-      window.speechSynthesis.speak(utterance)
+      if (!Voice.for(this.audio).speak(text, 0.88)) this.announcer.textContent = '語音暫時無法播放，請依照畫面文字繼續。'
     } catch {
       this.announcer.textContent = '語音暫時無法播放，請依照畫面文字繼續。'
     }
   }
+
 
   private stopSpeech(): void {
     if (this.speechSupported) window.speechSynthesis.cancel()

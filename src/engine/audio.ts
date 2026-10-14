@@ -4,6 +4,23 @@
  */
 export type Sfx = 'pickup' | 'jump' | 'land' | 'hurt' | 'ui' | 'win' | 'lose' | 'dash' | 'match' | 'shoot' | 'clear' | 'wrong'
 
+export type MusicTheme = 'map' | 1 | 2 | 3 | 4
+
+type Theme = { bpm: number; root: number; lead: 'marimba' | 'glock'; alternate: boolean; walk: boolean }
+/** Map theme plus one flavour per world: 果園、森林、小鎮、山道. Roots are MIDI note numbers. */
+const THEMES: Record<MusicTheme, Theme> = {
+  map: { bpm: 116, root: 60, lead: 'marimba', alternate: true, walk: true },
+  1: { bpm: 122, root: 65, lead: 'marimba', alternate: false, walk: true },
+  2: { bpm: 104, root: 67, lead: 'glock', alternate: true, walk: false },
+  3: { bpm: 126, root: 60, lead: 'marimba', alternate: true, walk: true },
+  4: { bpm: 112, root: 62, lead: 'glock', alternate: true, walk: true },
+}
+/** I – vi – IV – V, as semitone offsets from the theme root. */
+const PROGRESSION = [[0, 4, 7], [-3, 0, 4], [5, 9, 12], [7, 11, 14]]
+/** Eighth-note melodies over four bars; -1 is a rest. */
+const MELODY_A = [7, -1, 9, 7, 4, -1, 0, 2, 4, -1, 4, 7, 9, -1, 7, -1, 5, -1, 9, -1, 12, 9, 7, 5, 4, 2, 4, 7, 2, -1, -1, -1]
+const MELODY_B = [12, -1, 11, 12, 9, -1, 7, -1, 9, 7, 4, 7, 12, -1, -1, -1, 9, -1, 5, 9, 12, -1, 14, 12, 11, -1, 7, -1, 11, 12, 14, -1]
+
 export class Audio {
   readonly ctx: AudioContext
   private master: GainNode
@@ -12,6 +29,9 @@ export class Audio {
   private musicTimer = 0
   private musicOn = false
   private buffers = new Map<string, AudioBuffer>()
+  private duckGain: GainNode
+  private theme: MusicTheme = 'map'
+  private noise: AudioBuffer | null = null
 
   constructor() {
     this.ctx = new AudioContext()
@@ -20,6 +40,8 @@ export class Audio {
     this.sfx = this.ctx.createGain()
     this.music.gain.value = 0.2
     this.sfx.gain.value = 0.55
+    this.duckGain = this.ctx.createGain()
+    this.duckGain.connect(this.music)
     this.music.connect(this.master)
     this.sfx.connect(this.master)
     this.master.connect(this.ctx.destination)
@@ -83,69 +105,116 @@ export class Audio {
       case 'dash': tone(500, 180, 0.18, 'sawtooth', 0.08); break
       case 'shoot': tone(420, 1040, 0.13, 'triangle', 0.18); tone(880, 1220, 0.09, 'sine', 0.13, 0.04); break
       case 'match': tone(659, 784, 0.12, 'sine', 0.18); tone(784, 988, 0.15, 'triangle', 0.15, 0.09); break
-      case 'clear': [523, 659, 784].forEach((f, i) => tone(f, f * 1.015, 0.22, 'triangle', 0.16, i * 0.07)); break
+      case 'clear': [784, 988, 1175, 1568].forEach((f, i) => tone(f, f * 1.015, 0.24, 'sine', 0.16, i * 0.05)); tone(2637, 2640, 0.4, 'sine', 0.05, 0.2); break
       case 'wrong': tone(330, 294, 0.11, 'sine', 0.08); break
-      case 'win': [523, 659, 784, 1047].forEach((f, i) => tone(f, f * 1.01, 0.3, 'triangle', 0.2, i * 0.11)); break
+      case 'win': [523, 659, 784, 1047, 1319, 1568].forEach((f, i) => tone(f, f * 1.01, i > 3 ? 0.6 : 0.24, i > 3 ? 'sine' : 'triangle', 0.2, i * 0.1)); tone(2093, 2100, 0.9, 'sine', 0.08, 0.62); break
       case 'lose': [392, 330, 262].forEach((f, i) => tone(f, f * 0.98, 0.28, 'sine', 0.1, i * 0.14)); break
     }
   }
 
-  /** A gentle cycling motif over warm chords; scheduled only while the player enables sound. */
+  /** Switch the candy-town soundtrack: the map theme or one of the four world themes. */
+  setMusicTheme(theme: MusicTheme): void {
+    this.theme = theme
+  }
+
+  /** Lower the soundtrack while recorded narration plays so the voice stays clear. */
+  duck(on: boolean): void {
+    this.duckGain.gain.setTargetAtTime(on ? 0.35 : 1, this.ctx.currentTime, on ? 0.05 : 0.4)
+  }
+
+  /**
+   * Bouncy candy-town soundtrack: marimba/glockenspiel lead, plucked bass, soft kick and shaker,
+   * scheduled an eighth note at a time with a short look-ahead.
+   */
   startMusic(): void {
     if (this.musicOn) return
     this.musicOn = true
-    const chords = [[261.6, 329.6, 392], [220, 261.6, 329.6], [246.9, 293.7, 369.9], [196, 246.9, 293.7]]
-    const melody = [[523.3, 659.3, 587.3, 392], [440, 523.3, 659.3, 523.3], [493.9, 587.3, 739.9, 587.3], [392, 493.9, 587.3, 523.3]]
-    let bar = 0
-    const schedule = () => {
+    let step = 0
+    let nextTime = 0
+    const tick = () => {
       if (!this.musicOn) return
       if (this.ctx.state !== 'running') {
-        this.musicTimer = window.setTimeout(schedule, 250)
+        this.musicTimer = window.setTimeout(tick, 250)
         return
       }
-      const start = this.ctx.currentTime + 0.04
-      const chord = chords[bar % chords.length]
-      const tune = melody[bar % melody.length]
-      chord.forEach(frequency => {
-        const oscillator = this.ctx.createOscillator()
-        const envelope = this.ctx.createGain()
-        oscillator.type = 'sine'
-        oscillator.frequency.value = frequency / 2
-        envelope.gain.setValueAtTime(0.0001, start)
-        envelope.gain.linearRampToValueAtTime(0.035, start + 0.45)
-        envelope.gain.setValueAtTime(0.035, start + 1.9)
-        envelope.gain.linearRampToValueAtTime(0.0001, start + 3.25)
-        oscillator.connect(envelope).connect(this.music)
-        oscillator.start(start)
-        oscillator.stop(start + 3.3)
-        const shimmer = this.ctx.createOscillator()
-        const shimmerGain = this.ctx.createGain()
-        shimmer.type = 'sine'
-        shimmer.frequency.value = frequency
-        shimmerGain.gain.setValueAtTime(0.0001, start)
-        shimmerGain.gain.linearRampToValueAtTime(0.008, start + 0.7)
-        shimmerGain.gain.linearRampToValueAtTime(0.0001, start + 3.1)
-        shimmer.connect(shimmerGain).connect(this.music)
-        shimmer.start(start)
-        shimmer.stop(start + 3.2)
-      })
-      tune.forEach((frequency, index) => {
-        const noteStart = start + index * 0.72
-        const oscillator = this.ctx.createOscillator()
-        const envelope = this.ctx.createGain()
-        oscillator.type = 'triangle'
-        oscillator.frequency.value = frequency
-        envelope.gain.setValueAtTime(0.0001, noteStart)
-        envelope.gain.linearRampToValueAtTime(0.028, noteStart + 0.025)
-        envelope.gain.exponentialRampToValueAtTime(0.0001, noteStart + 0.43)
-        oscillator.connect(envelope).connect(this.music)
-        oscillator.start(noteStart)
-        oscillator.stop(noteStart + 0.46)
-      })
-      bar += 1
-      this.musicTimer = window.setTimeout(schedule, 3_500)
+      if (nextTime < this.ctx.currentTime) nextTime = this.ctx.currentTime + 0.05
+      while (nextTime < this.ctx.currentTime + 0.15) {
+        this.scheduleStep(step, nextTime)
+        nextTime += 60 / THEMES[this.theme].bpm / 2
+        step = (step + 1) % 64
+      }
+      this.musicTimer = window.setTimeout(tick, 30)
     }
-    schedule()
+    tick()
+  }
+
+  private scheduleStep(step: number, time: number): void {
+    const theme = THEMES[this.theme]
+    const bar = Math.floor(step / 8) % 4
+    const beat = step % 8
+    const midi = (note: number) => 440 * 2 ** ((note - 69) / 12)
+    const chord = PROGRESSION[bar].map(note => note + theme.root)
+    const melody = (Math.floor(step / 32) === 1 && theme.alternate ? MELODY_B : MELODY_A)[step % 32]
+
+    if (beat === 0) chord.forEach(note => this.note(midi(note + 12), time, 1.6, 'sine', 0.018, 0.5))
+    if (beat === 0 || beat === 4) this.note(midi(chord[0] - 12 + (beat === 4 ? 7 : 0)), time, 0.32, 'triangle', 0.09, 0)
+    if (beat === 6 && theme.walk) this.note(midi(chord[0] - 12 + 4), time, 0.2, 'triangle', 0.06, 0)
+    if (beat === 0 || beat === 4) this.kick(time)
+    if (beat % 2 === 1) this.shaker(time, beat === 3 || beat === 7 ? 0.05 : 0.025)
+    if (melody >= 0) {
+      const frequency = midi(theme.root + 12 + melody)
+      if (theme.lead === 'marimba') {
+        this.note(frequency, time, 0.35, 'sine', 0.11, 0)
+        this.note(frequency * 4, time, 0.08, 'sine', 0.025, 0)
+      } else {
+        this.note(frequency * 2, time, 0.9, 'sine', 0.06, 0)
+        this.note(frequency * 2 * 2.76, time, 0.25, 'sine', 0.015, 0)
+      }
+    }
+  }
+
+  private note(frequency: number, time: number, duration: number, type: OscillatorType, volume: number, attack: number): void {
+    const oscillator = this.ctx.createOscillator()
+    const envelope = this.ctx.createGain()
+    oscillator.type = type
+    oscillator.frequency.value = frequency
+    envelope.gain.setValueAtTime(0.0001, time)
+    envelope.gain.linearRampToValueAtTime(volume, time + Math.max(0.006, attack))
+    envelope.gain.exponentialRampToValueAtTime(0.0001, time + Math.max(0.006, attack) + duration)
+    oscillator.connect(envelope).connect(this.duckGain)
+    oscillator.start(time)
+    oscillator.stop(time + attack + duration + 0.05)
+  }
+
+  private kick(time: number): void {
+    const oscillator = this.ctx.createOscillator()
+    const envelope = this.ctx.createGain()
+    oscillator.frequency.setValueAtTime(140, time)
+    oscillator.frequency.exponentialRampToValueAtTime(50, time + 0.12)
+    envelope.gain.setValueAtTime(0.12, time)
+    envelope.gain.exponentialRampToValueAtTime(0.0001, time + 0.16)
+    oscillator.connect(envelope).connect(this.duckGain)
+    oscillator.start(time)
+    oscillator.stop(time + 0.2)
+  }
+
+  private shaker(time: number, volume: number): void {
+    if (!this.noise) {
+      this.noise = this.ctx.createBuffer(1, this.ctx.sampleRate * 0.1, this.ctx.sampleRate)
+      const data = this.noise.getChannelData(0)
+      for (let i = 0; i < data.length; i += 1) data[i] = Math.random() * 2 - 1
+    }
+    const source = this.ctx.createBufferSource()
+    source.buffer = this.noise
+    const filter = this.ctx.createBiquadFilter()
+    filter.type = 'highpass'
+    filter.frequency.value = 6500
+    const envelope = this.ctx.createGain()
+    envelope.gain.setValueAtTime(volume, time)
+    envelope.gain.exponentialRampToValueAtTime(0.0001, time + 0.06)
+    source.connect(filter).connect(envelope).connect(this.duckGain)
+    source.start(time)
+    source.stop(time + 0.08)
   }
 
   stopMusic(): void {
