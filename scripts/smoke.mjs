@@ -157,20 +157,20 @@ async function finishMatch3(page) {
   }
   await page.waitForSelector('.result-screen')
 }
-/** Traces along the guide track (blue-tinted pixels) row by row, or scribbles across the canvas. */
+/** Traces along the guide track (blue-tinted pixels) row by row with the real mouse, or scribbles across the canvas. */
 async function traceSymbol(page, scribble = false) {
   const before = Number(await page.locator('.challenge-progress').getAttribute('aria-valuenow'))
-  await page.evaluate(scribble => {
+  const strokes = await page.evaluate(scribble => {
     const canvas = document.querySelector('.trace-canvas')
     const width = canvas.width
     const height = canvas.height
     const data = canvas.getContext('2d').getImageData(0, 0, width, height).data
     const box = canvas.getBoundingClientRect()
-    const fire = (type, x, y) => canvas.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, clientX: box.left + x / width * box.width, clientY: box.top + y / height * box.height }))
-    const stroke = (x1, y1, x2, y2) => { fire('pointerdown', x1, y1); fire('pointermove', (x1 + x2) / 2, (y1 + y2) / 2); fire('pointermove', x2, y2); fire('pointerup', x2, y2) }
+    const client = (x, y) => [box.left + x / width * box.width, box.top + y / height * box.height]
+    const out = []
     if (scribble) {
-      for (let row = 0; row < 12; row += 1) stroke(0, row * height / 12, width, row * height / 12 + height / 24)
-      return
+      for (let row = 0; row < 12; row += 1) out.push([client(2, row * height / 12), client(width - 2, row * height / 12 + height / 24)])
+      return out
     }
     for (let y = 0; y < height; y += Math.round(height / 40)) {
       let start = -1
@@ -179,12 +179,19 @@ async function traceSymbol(page, scribble = false) {
         const onTrack = x < width && data[i + 3] > 0 && data[i + 2] - data[i] > 25
         if (onTrack && start < 0) start = x
         if (!onTrack && start >= 0) {
-          if (x - start > 3) stroke(start, y, x - 1, y)
+          if (x - start > 3) out.push([client(start, y), client(x - 1, y)])
           start = -1
         }
       }
     }
+    return out
   }, scribble)
+  for (const [[x1, y1], [x2, y2]] of strokes) {
+    await page.mouse.move(x1, y1)
+    await page.mouse.down()
+    await page.mouse.move(x2, y2, { steps: 3 })
+    await page.mouse.up()
+  }
   await page.locator('[data-action="trace-check"]').click()
   if (scribble) return before
   await page.waitForFunction(previous => Number(document.querySelector('.challenge-progress')?.getAttribute('aria-valuenow') ?? 0) > previous || Boolean(document.querySelector('.result-screen')), before)
