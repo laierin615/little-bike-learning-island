@@ -178,6 +178,10 @@ try {
   }
   assert(!(await page.locator('[data-level="1"]').isDisabled()), 'First level should start unlocked')
   assert(await page.locator('[data-level="2"]').isDisabled(), 'Later levels should start locked')
+  await page.locator('[data-action="teacher-unlock"]').click()
+  assert(!(await page.locator('[data-level="24"]').isDisabled()), 'Teacher mode should open every level')
+  await page.locator('[data-action="teacher-unlock"]').click()
+  assert(await page.locator('[data-level="2"]').isDisabled(), 'Turning teacher mode off should restore step-by-step unlocking')
   const tweakCount = await page.evaluate(() => window.__game.tuning.controls.length)
   assert(tweakCount === 3, `Expected three live Tweak camera controls, got ${tweakCount}`)
   assert(await page.evaluate(() => window.__game.game.riderLoaded), 'The supplied bicycle-rider character did not load')

@@ -7,7 +7,22 @@
 // skipped, so re-running after editing game text only records the new sentences. Needs ffmpeg.
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { createInterface } from 'node:readline'
+import { fileURLToPath } from 'node:url'
 import { createServer } from 'vite'
+
+// Work from the project root no matter which folder the command is run from.
+process.chdir(resolve(dirname(fileURLToPath(import.meta.url)), '..'))
+
+/** Asks for the key in the terminal without echoing it; it stays in memory only. */
+function askHidden(question) {
+  return new Promise(done => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true })
+    rl._writeToOutput = text => { if (text.includes(question)) process.stdout.write(text) }
+    rl.question(question, answer => { rl.close(); process.stdout.write('\n'); done(answer.trim()) })
+  })
+}
 
 const args = process.argv.slice(2)
 const option = (name, fallback) => {
@@ -17,10 +32,17 @@ const option = (name, fallback) => {
 const samples = args.includes('--samples')
 const voiceName = option('--voice', 'Leda')
 const model = option('--model', process.env.GEMINI_TTS_MODEL ?? 'gemini-2.5-flash-preview-tts')
-const key = process.env.GEMINI_API_KEY
-if (!key) {
-  console.error('請先在終端機設定 GEMINI_API_KEY 再執行。')
-  process.exit(1)
+let key = process.env.GEMINI_API_KEY?.trim() ?? ''
+if (!/^[\w-]{30,}$/.test(key)) {
+  if (!process.stdin.isTTY) {
+    console.error('找不到有效的 GEMINI_API_KEY，請在終端機直接執行這支程式，它會請你貼上金鑰。')
+    process.exit(1)
+  }
+  key = await askHidden('請貼上 Gemini 金鑰後按 Enter（畫面不會顯示）：')
+  if (!/^[\w-]{30,}$/.test(key)) {
+    console.error('這看起來不是 Gemini 金鑰（通常是 AIza 開頭的一長串英數字），請再試一次。')
+    process.exit(1)
+  }
 }
 
 const STYLE = '請用台灣華語，像溫柔、可愛又有活力的幼兒園老師對大班小朋友說話，語速稍慢、咬字清楚、帶著微笑，自然地念出下面這句話，不要加任何其他字：'

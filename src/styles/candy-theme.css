@@ -268,3 +268,15 @@ button:focus-visible { outline-color: var(--candy-pink); }
   .map-header .campaign-brand p { font-size: 14px; white-space: nowrap; }
   .map-header .campaign-brand small { font-size: 10px; }
 }
+
+/* ---------- 老師模式：全部開放 ---------- */
+.campaign-node.is-open .node-bike { animation: none; box-shadow: 0 5px 0 color-mix(in srgb, var(--world-color) 65%, black); }
+.footer-actions { display: flex; align-items: center; gap: 8px; }
+.teacher-toggle { min-height: 38px; padding: 7px 12px; border: 2px solid #fff; border-radius: 12px; background: linear-gradient(180deg, #fff, #ffe6f2); box-shadow: 0 4px 0 #f2a6c9; color: #c42d68 !important; font-size: 12px; font-weight: 950; white-space: nowrap; }
+.teacher-toggle[aria-pressed="true"] { background: linear-gradient(180deg, #fff3b0, #ffc93a); box-shadow: 0 4px 0 #d99410; color: #7a3a00 !important; }
+.teacher-toggle:hover, .teacher-toggle:focus-visible { outline: 2px solid var(--candy-yellow); outline-offset: 2px; }
+@media (max-width: 760px) {
+  .map-screen .campaign-footer > span { display: none; }
+  .map-screen .campaign-footer { justify-content: flex-end; }
+  .teacher-toggle { min-height: 34px; padding: 5px 9px; font-size: 11px; }
+}

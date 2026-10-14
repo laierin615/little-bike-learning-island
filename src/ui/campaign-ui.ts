@@ -27,6 +27,7 @@ import { FEEDBACK, bubbleCorrect, connectCorrect, levelComplete, levelGuide, mem
 
 const VOICE_KEY = 'shuziyin.voice-guidance.v1'
 const SOUND_KEY = 'shuziyin.sound-enabled.v1'
+const TEACHER_KEY = 'shuziyin.teacher-unlock-all.v1'
 const ESCAPE: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 const html = (text: string) => text.replace(/[&<>"']/g, character => ESCAPE[character])
 
@@ -70,6 +71,7 @@ export class CampaignUi {
   private progress = this.readProgress()
   private soundEnabled = this.readSetting(SOUND_KEY, true)
   private voiceEnabled = this.readSetting(VOICE_KEY, true)
+  private teacherUnlockAll = this.readSetting(TEACHER_KEY, false)
   private readonly speechSupported = typeof window !== 'undefined'
     && 'speechSynthesis' in window
     && typeof SpeechSynthesisUtterance !== 'undefined'
@@ -107,6 +109,19 @@ export class CampaignUi {
       completedLevels: Object.keys(this.progress).length,
       stars: totalCampaignStars(this.progress),
     }
+  }
+
+  /** Teacher mode opens every level; otherwise levels unlock one by one. */
+  private isUnlocked(id: number): boolean {
+    return isLevelUnlocked(id, this.progress) || (this.teacherUnlockAll && id >= 1 && id <= CAMPAIGN_LEVELS.length)
+  }
+
+  private toggleTeacherUnlock(): void {
+    this.teacherUnlockAll = !this.teacherUnlockAll
+    this.saveSetting(TEACHER_KEY, this.teacherUnlockAll)
+    this.audio.play('ui')
+    this.renderMap()
+    this.announcer.textContent = this.teacherUnlockAll ? '老師模式：24 關全部開放。' : '已回到闖關模式：完成一關才會開下一關。'
   }
 
   private readProgress(): CampaignProgress {
@@ -173,7 +188,7 @@ export class CampaignUi {
       <div class="campaign-map-scroll" role="region" aria-label="24 關騎行地圖">
         ${this.roadMapMarkup(next, completed === CAMPAIGN_LEVELS.length)}
       </div>
-      <footer class="campaign-footer"><span>沒有倒數，答錯也沒關係，騎到哪裡都能回來再玩！</span><button class="practice-entry" type="button" data-action="practice">自由練習　›</button></footer>
+      <footer class="campaign-footer"><span>沒有倒數，答錯也沒關係，騎到哪裡都能回來再玩！</span><div class="footer-actions"><button class="teacher-toggle" type="button" data-action="teacher-unlock" aria-pressed="${this.teacherUnlockAll}" aria-label="老師模式：${this.teacherUnlockAll ? '目前全部開放，按一下回到逐關解鎖' : '目前逐關解鎖，按一下開放全部 24 關'}">${this.teacherUnlockAll ? '🔓 全部開放中' : '🔒 老師：全開'}</button><button class="practice-entry" type="button" data-action="practice">自由練習　›</button></div></footer>
       <div class="sr-only" aria-live="polite">共有 24 關，已完成 ${completed} 關。選第一關開始騎行。</div>
     </main>`)
 
@@ -226,9 +241,9 @@ export class CampaignUi {
       }).join('')
 
       const nodes = world.levels.map(level => {
-        const unlocked = isLevelUnlocked(level.id, this.progress)
+        const unlocked = this.isUnlocked(level.id)
         const earned = this.progress[level.id] ?? 0
-        const state = !unlocked ? 'locked' : earned ? 'completed' : 'ready'
+        const state = !unlocked ? 'locked' : earned ? 'completed' : level.id === next ? 'ready' : 'ready is-open'
         const accessible = `第 ${level.id} 關，${level.title}，${getModeLabel(level.mode)}。${unlocked ? earned ? `已完成，${earned} 顆星。` : '可以開始。' : '完成前一關後開放。'}挑戰內容：${level.story}`
         return `<button class="campaign-node is-${state}" type="button" data-level="${level.id}" style="--world-color:${world.color};--x:${levelX(level.id)};top:${local(levelY(level.id))}px" aria-label="${html(accessible)}" ${unlocked ? '' : 'disabled'}>
           <span class="node-number">${level.id}</span>
@@ -270,7 +285,7 @@ export class CampaignUi {
   }
 
   private startLevel(id: number): void {
-    if (!isLevelUnlocked(id, this.progress)) return
+    if (!this.isUnlocked(id)) return
     this.clearMemoryTimer()
     const level = getCampaignLevel(id)
     this.audio.setMusicTheme(level.world as 1 | 2 | 3 | 4)
@@ -409,7 +424,7 @@ export class CampaignUi {
     const stars = this.progress[level.id] ?? 1
     const nextId = level.id + 1
     const hasNext = nextId <= CAMPAIGN_LEVELS.length
-    const nextUnlocked = hasNext && isLevelUnlocked(nextId, this.progress)
+    const nextUnlocked = hasNext && this.isUnlocked(nextId)
     this.setScreen(`<main class="campaign-screen result-screen" style="--world-color:${level.color}"><section class="result-card" aria-labelledby="result-title"><div class="result-decoration" aria-hidden="true">✦　🚴　✦</div><span class="result-bike" aria-hidden="true">🏁</span><p class="campaign-kicker">${html(level.worldName)}・第 ${level.id} 關</p><h1 id="result-title">${level.id === 24 ? '騎到大終點！' : '太棒了！'}</h1><p class="result-copy">完成「${html(level.title)}」，又學會一個新本領。</p><div class="result-stars" aria-label="本關獲得 ${stars} 顆星">${'★'.repeat(stars)}${'☆'.repeat(3 - stars)}</div><p class="result-unlock">${hasNext ? `下一站「${html(getCampaignLevel(nextId).title)}」已開放。` : '24 關全部完成！你是單車學習小高手。'}</p>${nextUnlocked ? '<button class="campaign-primary" type="button" data-action="next-level">騎往下一關　›</button>' : ''}<button class="secondary-button" type="button" data-action="replay-level">再玩這一關</button><button class="text-button" type="button" data-action="back-map">回到關卡地圖</button></section></main>`)
   }
 
@@ -450,6 +465,7 @@ export class CampaignUi {
     else if (action === 'advance-round') this.advanceRound()
     else if (action === 'sound-toggle') this.toggleSound()
     else if (action === 'voice-toggle') this.toggleVoice()
+    else if (action === 'teacher-unlock') this.toggleTeacherUnlock()
     else if (button.dataset.pairSide && button.dataset.pairKey) this.selectPair(button.dataset.pairSide, button.dataset.pairKey)
     else if (button.dataset.memoryCard !== undefined) this.flipMemoryCard(Number(button.dataset.memoryCard))
     else if (button.dataset.roundChoice) this.answerRound(button.dataset.roundChoice)
