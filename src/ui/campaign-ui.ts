@@ -24,7 +24,7 @@ import {
 import { LearningUi } from './learning-ui'
 import { Voice } from '../engine/voice'
 import { FEEDBACK, bubbleCorrect, connectCorrect, levelComplete, levelGuide, memoryCorrect, roundSpeech, traceGood, traceStart } from '../game/speech-lines'
-import { TRACE_GRID, scoreTrace } from '../game/trace-rules'
+import { TRACE_GRID, TRACE_MIN_COVERAGE, scoreTrace } from '../game/trace-rules'
 
 const VOICE_KEY = 'shuziyin.voice-guidance.v1'
 const SOUND_KEY = 'shuziyin.sound-enabled.v1'
@@ -63,6 +63,28 @@ function shuffled<T>(items: readonly T[]): T[] {
     ;[result[index], result[other]] = [result[other], result[index]]
   }
   return result
+}
+
+/**
+ * Digits drawn the way children are taught to write them (not the printed glyph):
+ * 1 is a single straight stroke; 9 is a round loop with a straight stem down its right side.
+ */
+function handwrittenPath(symbol: string, size: number): Path2D | null {
+  const path = new Path2D()
+  const at = (value: number) => value * size
+  if (symbol === '1') {
+    path.moveTo(at(0.5), at(0.18))
+    path.lineTo(at(0.5), at(0.82))
+    return path
+  }
+  if (symbol === '9') {
+    path.moveTo(at(0.63), at(0.34))
+    path.arc(at(0.48), at(0.34), at(0.15), 0, Math.PI * 2, true)
+    path.moveTo(at(0.63), at(0.34))
+    path.lineTo(at(0.61), at(0.82))
+    return path
+  }
+  return null
 }
 
 export class CampaignUi {
@@ -554,6 +576,24 @@ export class CampaignUi {
   /** Draws the fat symbol track (and its dashed outline when `guide`) centred in a size×size box. */
   private drawTraceTrack(context: CanvasRenderingContext2D, size: number, symbol: string, color: string, guide: boolean): void {
     context.save()
+    const hand = handwrittenPath(symbol, size)
+    if (hand) {
+      // Handwritten shapes: a fat track to trace in, with a dashed centre line showing the stroke.
+      context.lineJoin = 'round'
+      context.lineCap = 'round'
+      context.strokeStyle = color
+      context.lineWidth = size * 0.17
+      if (guide) context.globalAlpha = 0.24
+      context.stroke(hand)
+      if (guide) {
+        context.globalAlpha = 0.95
+        context.setLineDash([size * 0.03, size * 0.026])
+        context.lineWidth = Math.max(3, size * 0.014)
+        context.stroke(hand)
+      }
+      context.restore()
+      return
+    }
     context.font = `900 ${Math.round(size * 0.72)}px "ManusCC0", "ManusCC0 Sans CJK SC", "Noto Sans TC", sans-serif`
     context.textAlign = 'center'
     context.textBaseline = 'alphabetic'
@@ -686,7 +726,7 @@ export class CampaignUi {
     this.session.attempts += 1
     if (!score.passed) {
       this.session.mistakes += 1
-      this.session.feedback = score.coverage < 0.6 ? FEEDBACK.traceMore : FEEDBACK.traceOff
+      this.session.feedback = score.coverage < TRACE_MIN_COVERAGE ? FEEDBACK.traceMore : FEEDBACK.traceOff
       this.audio.play('wrong')
       this.speak(this.session.feedback)
       this.renderChallenge()

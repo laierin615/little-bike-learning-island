@@ -4,8 +4,9 @@
  * enough of the track and most of the ink stays on it. Stroke order is not checked.
  */
 export const TRACE_GRID = 64
-export const TRACE_MIN_COVERAGE = 0.6
-export const TRACE_MIN_PRECISION = 0.7
+// Kept generous for 5–6 year olds: wobbly lines that roughly follow the shape should pass.
+export const TRACE_MIN_COVERAGE = 0.45
+export const TRACE_MIN_PRECISION = 0.55
 
 export type TraceScore = { coverage: number; precision: number; passed: boolean }
 
@@ -28,8 +29,8 @@ export function dilate(mask: ArrayLike<number>, size: number, radius: number): U
 }
 
 export function scoreTrace(target: ArrayLike<number>, ink: ArrayLike<number>, size = TRACE_GRID): TraceScore {
-  const nearInk = dilate(ink, size, 1)
-  const nearTarget = dilate(target, size, 2)
+  const nearInk = dilate(ink, size, 2)
+  const nearTarget = dilate(target, size, 4)
   let targetCells = 0
   let coveredCells = 0
   let inkCells = 0

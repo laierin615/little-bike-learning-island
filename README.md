@@ -39,7 +39,7 @@ pnpm smoke  # build 後以 Chromium 驗證 30 關、六種玩法（含描寫）�
 ## 專案結構
 
 - `src/game/campaign.ts`：30 關資料、挑戰描述、學習配對與題庫；`shuffleChoices` 讓每題答案位置隨機。
-- `src/game/trace-rules.ts`：描寫判定（64×64 格點，覆蓋 ≥ 60%、落在虛線附近 ≥ 70%，不檢查筆順）。
+- `src/game/trace-rules.ts`：描寫判定（64×64 格點，覆蓋 ≥ 45%、落在虛線附近 ≥ 55%，不檢查筆順；1、9 用手寫筆形）。
 - `src/game/campaign-rules.ts`：解鎖、星數、棋盤和消除規則。
 - `src/ui/campaign-ui.ts` / `campaign-ui.css`：進度地圖與五種玩法介面。
 - `src/ui/learning-ui.ts`：原有自由練習、語音導讀和本機紀錄。
